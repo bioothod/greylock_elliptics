@@ -14,6 +14,10 @@
 namespace ioremap { namespace indexes {
 static size_t max_page_size = 4096;
 
+#define dprintf(fmt, a...) do {} while (0)
+//#define dprintf(fmt, a...) printf(fmt, ##a)
+
+
 struct key {
 	std::string id;
 	std::string value;
@@ -98,14 +102,14 @@ struct page {
 		msgpack::object obj = result.get();
 		obj.convert(this);
 
-		printf("page load: %s\n", str().c_str());
+		dprintf("page load: %s\n", str().c_str());
 	}
 
 	std::string save() const {
 		std::stringstream ss;
 		msgpack::pack(ss, *this);
 
-		printf("page save: %s\n", str().c_str());
+		dprintf("page save: %s\n", str().c_str());
 
 		return ss.str();
 	}
@@ -197,14 +201,14 @@ struct page {
 			objects.swap(copy);
 			recalculate_size();
 
-			printf("insert/split: %s: split: %s %s\n", obj.str().c_str(), str().c_str(), other.str().c_str());
+			dprintf("insert/split: %s: split: %s %s\n", obj.str().c_str(), str().c_str(), other.str().c_str());
 
 			return true;
 		}
 
 		objects.swap(copy);
 
-		printf("insert/split: %s: %s\n", obj.str().c_str(), str().c_str());
+		dprintf("insert/split: %s: %s\n", obj.str().c_str(), str().c_str());
 		return false;
 	}
 
@@ -239,8 +243,7 @@ public:
 		} catch (const std::exception &e) {
 			fprintf(stderr, "index: could not read start key: %s\n", e.what());
 
-			std::string s = start_page.save();
-			m_t.write(m_sk, s.data(), s.size());
+			m_t.write(m_sk, start_page.save());
 		}
 
 		try {
@@ -259,7 +262,7 @@ public:
 			m_t.write(meta_key(), meta.data(), meta.size());
 		}
 
-		printf("index: opened: page_index: %d\n", m_meta.page_index);
+		dprintf("index: opened: page_index: %d\n", m_meta.page_index);
 	}
 
 	key search(const key &obj) const {
@@ -289,7 +292,7 @@ private:
 
 		key found = p.search_node(obj);
 
-		printf("search: %s: page: %s -> %s, found: %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str(), found.str().c_str());
+		dprintf("search: %s: page: %s -> %s, found: %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str(), found.str().c_str());
 
 		if (!found)
 			return found;
@@ -310,7 +313,7 @@ private:
 
 		page split;
 
-		printf("insert: %s: page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
+		dprintf("insert: %s: page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
 
 		key tmp_start_key = obj;
 		if (!p.is_empty())
@@ -319,7 +322,7 @@ private:
 
 		if (!p.is_leaf()) {
 			key found = p.search_node(obj);
-			printf("insert: %s: page: %s -> %s, found: %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str(), found.str().c_str());
+			dprintf("insert: %s: page: %s -> %s, found: %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str(), found.str().c_str());
 			if (!found) {
 				// this is not a leaf node, but there is no leaf in @objects
 				// this is the only reason non-leaf page search failed,
@@ -339,7 +342,7 @@ private:
 				p.insert_and_split(leaf_key, unused_split);
 				m_t.write(page_key, p.save());
 
-				printf("insert: %s: page: %s -> %s, leaf: %s -> %s\n",
+				dprintf("insert: %s: page: %s -> %s, leaf: %s -> %s\n",
 						obj.str().c_str(),
 						page_key.c_str(), p.str().c_str(),
 						leaf_key.str().c_str(), leaf.str().c_str());
@@ -349,7 +352,7 @@ private:
 
 			insert(found.value, obj, rec);
 
-			printf("insert: %s: returned: %s -> %s, found: %s, rec: page_start: %s, split_key: %s\n",
+			dprintf("insert: %s: returned: %s -> %s, found: %s, rec: page_start: %s, split_key: %s\n",
 					obj.str().c_str(),
 					page_key.c_str(), p.str().c_str(),
 					found.str().c_str(),
@@ -392,7 +395,7 @@ private:
 			rec.split_key.value = generate_page_key();
 			rec.split_key.id = split.objects.front().id;
 
-			printf("insert: %s: write split page: %s -> %s, split: key: %s -> %s\n",
+			dprintf("insert: %s: write split page: %s -> %s, split: key: %s -> %s\n",
 					obj.str().c_str(),
 					page_key.c_str(), p.str().c_str(),
 					rec.split_key.str().c_str(), split.str().c_str());
@@ -419,11 +422,11 @@ private:
 
 			m_t.write(m_sk, new_root.save());
 
-			printf("insert: %s: write split page: %s -> %s, old_root_key: %s, new_root: %s\n",
+			dprintf("insert: %s: write split page: %s -> %s, old_root_key: %s, new_root: %s\n",
 					obj.str().c_str(), page_key.c_str(), p.str().c_str(), old_root_key.str().c_str(), new_root.str().c_str());
 		} else {
-			printf("insert: %s: write main page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
-			m_t.write(page_key, p.save());
+			dprintf("insert: %s: write main page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
+			m_t.write(page_key, p.save(), true);
 		}
 
 		return;
@@ -433,7 +436,7 @@ private:
 		char buf[128 + m_sk.size()];
 
 		snprintf(buf, sizeof(buf), "%s.%d", m_sk.c_str(), m_meta.page_index);
-		printf("generated key: %s\n", buf);
+		dprintf("generated key: %s\n", buf);
 		m_meta.page_index++;
 		return std::string(buf);
 	}
@@ -464,20 +467,58 @@ public:
 	}
 
 	std::string read(const std::string &key) {
-		printf("elliptics read: key: %s\n", key.c_str());
-		elliptics::read_result_entry e = session().read_data(key, 0, 0).get_one();
-		printf("elliptics read: key: %s, data-size: %zd\n", key.c_str(), e.file().size());
+		dprintf("elliptics read: key: %s\n", key.c_str());
+		elliptics::session s = session(true);
+		elliptics::read_result_entry e = s.read_data(key, 0, 0).get_one();
+		dprintf("elliptics read: key: %s, data-size: %zd\n", key.c_str(), e.file().size());
 		return e.file().to_string();
 	}
 
-	void write(const std::string &key, const char *data, size_t size) {
-		printf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
+	void write_prepare_commit(const std::string &key, const char *data, size_t size) {
+		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
 		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data, size);
-		elliptics::write_result_entry e = session().write_data(key, dp, 0).get_one();
+
+		elliptics::session s = session(false);
+
+		elliptics::key id(key);
+		s.transform(id);
+
+		dnet_io_control ctl;
+
+		memset(&ctl, 0, sizeof(ctl));
+		dnet_current_time(&ctl.io.timestamp);
+
+		ctl.cflags = s.get_cflags();
+		ctl.data = dp.data();
+
+		ctl.io.flags = s.get_ioflags() | DNET_IO_FLAGS_PREPARE | DNET_IO_FLAGS_PLAIN_WRITE | DNET_IO_FLAGS_COMMIT;
+		ctl.io.user_flags = s.get_user_flags();
+		ctl.io.offset = 0;
+		ctl.io.size = dp.size();
+		ctl.io.num = indexes::max_page_size * 1.5;
+		if (ctl.io.size > ctl.io.num) {
+			ctl.io.num = ctl.io.size * 2;
+		}
+
+		memcpy(&ctl.id, &id.id(), sizeof(ctl.id));
+
+		ctl.fd = -1;
+
+		elliptics::write_result_entry e = s.write_data(ctl).get_one();
 	}
 
-	void write(const std::string &key, const std::string &data) {
-		return write(key, data.c_str(), data.size());
+	void write(const std::string &key, const char *data, size_t size, bool cache = false) {
+		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
+		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data, size);
+		elliptics::session s = session(cache);
+		elliptics::write_result_entry e = s.write_data(key, dp, 0).get_one();
+	}
+
+	void write(const std::string &key, const std::string &data, bool cache = false) {
+		if (cache)
+			return write(key, data.c_str(), data.size(), cache);
+		else
+			return write_prepare_commit(key, data.c_str(), data.size());
 	}
 
 private:
@@ -486,10 +527,13 @@ private:
 	std::string m_ns;
 	std::vector<int> m_groups;
 
-	elliptics::session session() {
+	elliptics::session session(bool cache) {
 		elliptics::session s(m_node);
 		s.set_namespace(m_ns);
 		s.set_groups(m_groups);
+		s.set_timeout(60);
+		if (cache)
+			s.set_ioflags(DNET_IO_FLAGS_CACHE);
 
 		return s;
 	}
@@ -545,13 +589,12 @@ int main(int argc, char *argv[])
 	indexes::index<elliptics_transport> idx(t, sk);
 
 	time_t tm = time(NULL);
-	tm = 1431913636;
 	srand(tm);
 
-	printf("index: init: t: %zd\n", tm);
+	dprintf("index: init: t: %zd\n", tm);
 
 	std::vector<indexes::key> keys;
-	for (int i = 0; i < 1000000; ++i) {
+	for (int i = 0; i < 100000; ++i) {
 		indexes::key k;
 
 		char buf[128];
@@ -562,10 +605,10 @@ int main(int argc, char *argv[])
 		snprintf(buf, sizeof(buf), "value.%03d", i);
 		k.value = std::string(buf);
 
-		printf("inserting: %s\n", k.str().c_str());
+		dprintf("inserting: %s\n", k.str().c_str());
 		idx.insert(k);
 		keys.push_back(k);
-		printf("inserted: %s\n\n", k.str().c_str());
+		dprintf("inserted: %s\n\n", k.str().c_str());
 
 		indexes::key found = idx.search(k);
 		if (!found) {
@@ -582,7 +625,7 @@ int main(int argc, char *argv[])
 			return -1;
 		}
 
-		printf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
+		dprintf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
 	}
 
 	for (auto it = keys.begin(); it != keys.end(); ++it) {
@@ -602,6 +645,6 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "search failed: value mismatch: found: %s, must be: %s\n", found.value.c_str(), it->value.c_str());
 		}
 
-		printf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
+		dprintf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
 	}
 }
