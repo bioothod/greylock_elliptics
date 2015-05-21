@@ -223,8 +223,14 @@ struct page {
 
 struct index_meta {
 	int page_index = 0;
+	int num_pages = 0;
+	uint64_t num_keys = 0;
 
-	MSGPACK_DEFINE(page_index);
+	MSGPACK_DEFINE(page_index, num_pages, num_keys);
+
+	bool operator != (const index_meta &other) const {
+		return ((page_index != other.page_index) || (num_pages != other.num_pages) || (num_keys != other.num_keys));
+	}
 };
 
 struct recursion {
@@ -256,13 +262,14 @@ public:
 		} catch (const std::exception &e) {
 			fprintf(stderr, "index: could not read index metadata: %s\n", e.what());
 
-			std::stringstream ss;
-			msgpack::pack(ss, m_meta);
-			std::string meta = ss.str();
-			m_t.write(meta_key(), meta.data(), meta.size());
+			meta_write();
 		}
 
 		dprintf("index: opened: page_index: %d\n", m_meta.page_index);
+	}
+
+	~index() {
+		meta_write();
 	}
 
 	key search(const key &obj) const {
@@ -270,8 +277,13 @@ public:
 	}
 
 	void insert(const key &obj) {
+		index_meta old = m_meta;
 		recursion tmp;
 		insert(m_sk, obj, tmp);
+
+		if (m_meta != old) {
+			meta_write();
+		}
 	}
 
 private:
@@ -282,6 +294,12 @@ private:
 
 	std::string meta_key() const {
 		return m_sk + ".meta";
+	}
+
+	void meta_write() {
+		std::stringstream ss;
+		msgpack::pack(ss, m_meta);
+		m_t.write(meta_key(), ss.str(), true);
 	}
 
 	key search(const std::string &page_key, const key &obj) const {
@@ -322,7 +340,11 @@ private:
 
 		if (!p.is_leaf()) {
 			key found = p.search_node(obj);
-			dprintf("insert: %s: page: %s -> %s, found: %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str(), found.str().c_str());
+			dprintf("insert: %s: page: %s -> %s, found: %s\n",
+				obj.str().c_str(),
+				page_key.c_str(), p.str().c_str(),
+				found.str().c_str());
+
 			if (!found) {
 				// this is not a leaf node, but there is no leaf in @objects
 				// this is the only reason non-leaf page search failed,
@@ -347,6 +369,7 @@ private:
 						page_key.c_str(), p.str().c_str(),
 						leaf_key.str().c_str(), leaf.str().c_str());
 
+				m_meta.num_pages++;
 				return;
 			}
 
@@ -400,6 +423,8 @@ private:
 					page_key.c_str(), p.str().c_str(),
 					rec.split_key.str().c_str(), split.str().c_str());
 			m_t.write(rec.split_key.value, split.save());
+
+			m_meta.num_pages++;
 		}
 
 		if (!split.is_empty() && page_key == m_sk) {
@@ -422,8 +447,12 @@ private:
 
 			m_t.write(m_sk, new_root.save());
 
+			m_meta.num_pages++;
+
 			dprintf("insert: %s: write split page: %s -> %s, old_root_key: %s, new_root: %s\n",
-					obj.str().c_str(), page_key.c_str(), p.str().c_str(), old_root_key.str().c_str(), new_root.str().c_str());
+					obj.str().c_str(),
+					page_key.c_str(), p.str().c_str(),
+					old_root_key.str().c_str(), new_root.str().c_str());
 		} else {
 			dprintf("insert: %s: write main page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
 			m_t.write(page_key, p.save(), true);
