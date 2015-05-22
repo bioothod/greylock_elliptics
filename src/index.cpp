@@ -360,12 +360,16 @@ public:
 		}
 	}
 
-	iterator<T> begin() {
+	iterator<T> begin(const std::string &k) {
 		key zero;
-		zero.id = std::string("\0");
+		zero.id = k;
 
 		auto found = search(m_sk, zero);
 		return iterator<T>(m_t, found.second);
+	}
+
+	iterator<T> begin() {
+		return begin(std::string("\0"));
 	}
 
 	iterator<T> end() {
