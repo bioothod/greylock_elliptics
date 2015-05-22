@@ -59,8 +59,9 @@ struct page {
 	uint32_t flags = 0;
 	std::vector<key> objects;
 	size_t total_size = 0;
+	std::string next;
 
-	MSGPACK_DEFINE(flags, objects, total_size);
+	MSGPACK_DEFINE(flags, objects, total_size, next);
 
 	page(bool leaf = false) {
 		if (leaf) {
@@ -70,6 +71,13 @@ struct page {
 
 	bool is_empty() const {
 		return objects.size() == 0;
+	}
+
+	bool operator==(const page &other) const {
+		return ((flags == other.flags) && (objects == other.objects));
+	}
+	bool operator!=(const page &other) const {
+		return ((flags != other.flags) || (objects != other.objects));
 	}
 
 	std::string str() const {
@@ -96,6 +104,11 @@ struct page {
 	}
 
 	void load(const char *data, size_t size) {
+		objects.clear();
+		flags = 0;
+		next.clear();
+		total_size = 0;
+
 		msgpack::unpacked result;
 
 		msgpack::unpack(&result, data, size);
@@ -131,13 +144,13 @@ struct page {
 	bool replace(const key &src, const key &dst) {
 		for (auto it = objects.begin(); it != objects.end(); ++it) {
 			if (src.id == it->id) {
-				printf("p: %s: replace: %s -> %s\n", str().c_str(), it->str().c_str(), dst.str().c_str());
+				dprintf("p: %s: replace: %s -> %s\n", str().c_str(), it->str().c_str(), dst.str().c_str());
 				it->id = dst.id;
 				return true;
 			}
 		}
 
-		printf("p: %s: replace failed: %s -> %s\n", str().c_str(), src.str().c_str(), dst.str().c_str());
+		dprintf("p: %s: replace failed: %s -> %s\n", str().c_str(), src.str().c_str(), dst.str().c_str());
 		return false;
 	}
 
@@ -162,7 +175,7 @@ struct page {
 		return objects.back();
 	}
 
-	bool insert_and_split(const key &obj, struct page &other) {
+	bool insert_and_split(const key &obj, page &other) {
 		std::vector<key> copy;
 		bool copied = false;
 
@@ -221,15 +234,75 @@ struct page {
 	}
 };
 
+template <typename T>
+class iterator {
+public:
+	typedef iterator self_type;
+	typedef key value_type;
+	typedef key& reference;
+	typedef key* pointer;
+	typedef std::forward_iterator_tag iterator_category;
+	typedef std::ptrdiff_t difference_type;
+
+	iterator(T &t, page &p) : m_t(t), m_page(p) {}
+
+	self_type operator++() {
+		++m_page_internal_index;
+		try_loading_next_page();
+
+		return *this;
+	}
+
+	self_type operator++(int num) {
+		m_page_internal_index += num;
+		try_loading_next_page();
+
+		return *this;
+	}
+
+	reference operator*() {
+		return m_page.objects[m_page_internal_index];
+	}
+	pointer operator->() {
+		return &m_page.objects[m_page_internal_index];
+	}
+
+	bool operator==(const self_type& rhs) {
+		return m_page == rhs.m_page;
+	}
+	bool operator!=(const self_type& rhs) {
+		return m_page != rhs.m_page;
+	}
+private:
+	T &m_t;
+	page m_page;
+	size_t m_page_index = 0;
+	size_t m_page_internal_index = 0;
+
+	void try_loading_next_page() {
+		if (m_page_internal_index >= m_page.objects.size()) {
+			m_page_internal_index = 0;
+			++m_page_index;
+
+			if (m_page.next.empty()) {
+				m_page = page();
+			} else {
+				std::string p = m_t.read(m_page.next);
+				m_page.load(p.data(), p.size());
+			}
+		}
+	}
+};
+
 struct index_meta {
 	int page_index = 0;
 	int num_pages = 0;
-	uint64_t num_keys = 0;
+	uint64_t num_leaf_pages = 0;
 
-	MSGPACK_DEFINE(page_index, num_pages, num_keys);
+	MSGPACK_DEFINE(page_index, num_pages, num_leaf_pages);
 
 	bool operator != (const index_meta &other) const {
-		return ((page_index != other.page_index) || (num_pages != other.num_pages) || (num_keys != other.num_keys));
+		return ((page_index != other.page_index) || (num_pages != other.num_pages) || (num_leaf_pages != other.num_leaf_pages));
 	}
 };
 
@@ -273,7 +346,8 @@ public:
 	}
 
 	key search(const key &obj) const {
-		return search(m_sk, obj);
+		auto found = search(m_sk, obj);
+		return found.first;
 	}
 
 	void insert(const key &obj) {
@@ -284,6 +358,19 @@ public:
 		if (m_meta != old) {
 			meta_write();
 		}
+	}
+
+	iterator<T> begin() {
+		key zero;
+		zero.id = std::string("\0");
+
+		auto found = search(m_sk, zero);
+		return iterator<T>(m_t, found.second);
+	}
+
+	iterator<T> end() {
+		page p;
+		return iterator<T>(m_t, p);
 	}
 
 private:
@@ -302,7 +389,7 @@ private:
 		m_t.write(meta_key(), ss.str(), true);
 	}
 
-	key search(const std::string &page_key, const key &obj) const {
+	std::pair<key, page> search(const std::string &page_key, const key &obj) const {
 		std::string data = m_t.read(page_key);
 
 		page p;
@@ -310,13 +397,16 @@ private:
 
 		key found = p.search_node(obj);
 
-		dprintf("search: %s: page: %s -> %s, found: %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str(), found.str().c_str());
+		dprintf("search: %s: page: %s -> %s, found: %s\n",
+			obj.str().c_str(),
+			page_key.c_str(), p.str().c_str(),
+			found.str().c_str());
 
 		if (!found)
-			return found;
+			return std::make_pair(found, p);
 
 		if (p.is_leaf())
-			return found;
+			return std::make_pair(found, p);
 
 		return search(found.value, obj);
 	}
@@ -370,6 +460,7 @@ private:
 						leaf_key.str().c_str(), leaf.str().c_str());
 
 				m_meta.num_pages++;
+				m_meta.num_leaf_pages++;
 				return;
 			}
 
@@ -418,6 +509,9 @@ private:
 			rec.split_key.value = generate_page_key();
 			rec.split_key.id = split.objects.front().id;
 
+			split.next = p.next;
+			p.next = rec.split_key.value;
+
 			dprintf("insert: %s: write split page: %s -> %s, split: key: %s -> %s\n",
 					obj.str().c_str(),
 					page_key.c_str(), p.str().c_str(),
@@ -425,6 +519,8 @@ private:
 			m_t.write(rec.split_key.value, split.save());
 
 			m_meta.num_pages++;
+			if (p.is_leaf())
+				m_meta.num_leaf_pages++;
 		}
 
 		if (!split.is_empty() && page_key == m_sk) {
@@ -623,15 +719,16 @@ int main(int argc, char *argv[])
 	dprintf("index: init: t: %zd\n", tm);
 
 	std::vector<indexes::key> keys;
-	for (int i = 0; i < 100000; ++i) {
+	int max = 1000;
+	for (int i = 0; i < max; ++i) {
 		indexes::key k;
 
 		char buf[128];
 
-		snprintf(buf, sizeof(buf), "%08x.%03d", rand(), i);
+		snprintf(buf, sizeof(buf), "%08x.%08d", rand(), i);
 		k.id = std::string(buf);
 
-		snprintf(buf, sizeof(buf), "value.%03d", i);
+		snprintf(buf, sizeof(buf), "value.%08d", i);
 		k.value = std::string(buf);
 
 		dprintf("inserting: %s\n", k.str().c_str());
@@ -655,6 +752,10 @@ int main(int argc, char *argv[])
 		}
 
 		dprintf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
+	}
+
+	for (auto it = idx.begin(), end = idx.end(); it != end; ++it) {
+		dprintf("iterator: %s\n", it->str().c_str());
 	}
 
 	for (auto it = keys.begin(); it != keys.end(); ++it) {
