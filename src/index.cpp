@@ -315,16 +315,6 @@ template <typename T>
 class index {
 public:
 	index(T &t, const std::string &sk): m_t(t), m_sk(sk) {
-		page start_page;
-
-		try {
-			std::string start = m_t.read(m_sk);
-		} catch (const std::exception &e) {
-			fprintf(stderr, "index: could not read start key: %s\n", e.what());
-
-			m_t.write(m_sk, start_page.save());
-		}
-
 		try {
 			std::string meta = m_t.read(meta_key());
 
@@ -335,6 +325,7 @@ public:
 		} catch (const std::exception &e) {
 			fprintf(stderr, "index: could not read index metadata: %s\n", e.what());
 
+			start_page_init();
 			meta_write();
 		}
 
@@ -391,6 +382,18 @@ private:
 		std::stringstream ss;
 		msgpack::pack(ss, m_meta);
 		m_t.write(meta_key(), ss.str(), true);
+	}
+
+	void start_page_init() {
+		page start_page;
+
+		try {
+			std::string start = m_t.read(m_sk);
+		} catch (const std::exception &e) {
+			fprintf(stderr, "index: could not read start key: %s\n", e.what());
+
+			m_t.write(m_sk, start_page.save());
+		}
 	}
 
 	std::pair<key, page> search(const std::string &page_key, const key &obj) const {
