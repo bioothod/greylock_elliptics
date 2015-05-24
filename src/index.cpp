@@ -11,6 +11,31 @@
 
 #include <boost/program_options.hpp>
 
+#include <ribosome/timer.hpp>
+
+static inline std::string lexical_cast(size_t value) {
+	if (value == 0) {
+		return std::string("0");
+	}
+
+	std::string result;
+	size_t length = 0;
+	size_t calculated = value;
+	while (calculated) {
+		calculated /= 10;
+		++length;
+	}
+
+	result.resize(length);
+	while (value) {
+		--length;
+		result[length] = '0' + (value % 10);
+		value /= 10;
+	}
+
+	return result;
+}
+
 namespace ioremap { namespace indexes {
 static size_t max_page_size = 4096;
 
@@ -351,7 +376,7 @@ public:
 		}
 	}
 
-	iterator<T> begin(const std::string &k) {
+	iterator<T> begin(const std::string &k) const {
 		key zero;
 		zero.id = k;
 
@@ -359,13 +384,31 @@ public:
 		return iterator<T>(m_t, found.second);
 	}
 
-	iterator<T> begin() {
+	iterator<T> begin() const {
 		return begin(std::string("\0"));
 	}
 
-	iterator<T> end() {
+	iterator<T> end() const {
 		page p;
 		return iterator<T>(m_t, p);
+	}
+
+	std::vector<key> keys(const std::string &start) const {
+		std::vector<key> ret;
+		for (auto it = begin(start), e = end(); it != e; ++it) {
+			ret.push_back(*it);
+		}
+
+		return ret;
+	}
+
+	std::vector<key> keys() const {
+		std::vector<key> ret;
+		for (auto it = begin(), e = end(); it != e; ++it) {
+			ret.push_back(*it);
+		}
+
+		return ret;
 	}
 
 private:
@@ -574,6 +617,113 @@ private:
 	}
 };
 
+namespace intersect {
+struct result {
+	std::map<std::string, std::vector<key>> keys;
+};
+
+template <typename T>
+class intersector {
+public:
+	intersector(T &t) : m_t(t) {}
+	result intersect(const std::vector<std::string> &indexes) const {
+		typedef std::vector<key> keys_t;
+		struct iter {
+			keys_t keys;
+			keys_t::iterator begin, end;
+		};
+		std::vector<iter> idata;
+
+		for_each(indexes.begin(), indexes.end(), [&] (const std::string &name) {
+				index<T> idx(m_t, name);
+
+				iter it;
+				it.keys = idx.keys();
+
+				idata.emplace_back(it);
+			});
+
+		printf("indexes: %zd, idata: %zd\n", indexes.size(), idata.size());
+		for_each(idata.begin(), idata.end(), [&] (iter &it) {
+				it.begin = it.keys.begin();
+				it.end = it.keys.end();
+			});
+		printf("intersect: first key: %s\n", idata.back().begin->str().c_str());
+		result res;
+
+		bool completed = false;
+		while (!completed) {
+			std::vector<int> pos;
+
+			int current = -1;
+			for (auto idata_it = idata.begin(); idata_it != idata.end(); ++idata_it) {
+				auto &it = idata_it->begin;
+				auto &e = idata_it->end;
+				++current;
+
+				if (it == e) {
+					completed = true;
+					break;
+				}
+
+				if (pos.size() == 0) {
+					pos.push_back(current);
+					continue;
+				}
+
+				auto &min_it = idata[pos[0]].begin;
+
+				if (*it == *min_it) {
+					pos.push_back(current);
+					continue;
+				}
+
+				if (*it < *min_it) {
+					pos.clear();
+					pos.push_back(current);
+				}
+			}
+
+			if (completed)
+				break;
+
+			if (pos.size() != idata.size()) {
+				for (auto it = pos.begin(); it != pos.end(); ++it) {
+					auto &min_it = idata[*it].begin;
+					++min_it;
+				}
+
+				continue;
+			}
+
+			for (auto it = pos.begin(); it != pos.end(); ++it) {
+				auto &min_it = idata[*it].begin;
+
+				key k = *min_it;
+				std::string res_idx = k.id;
+				k.id = indexes[*it];
+
+				auto find_it = res.keys.find(res_idx);
+				if (find_it == res.keys.end()) {
+					std::vector<key> kk;
+					kk.emplace_back(k);
+					res.keys[res_idx] = kk;
+				} else {
+					find_it->second.emplace_back(k);
+				}
+
+				++min_it;
+			}
+		}
+
+		return res;
+	}
+private:
+	T &m_t;
+};
+
+} // ioremap::indexes::intersect
+
 }} // ioremap::indexes
 
 using namespace ioremap;
@@ -671,6 +821,150 @@ private:
 	}
 };
 
+template <typename T>
+class test {
+#define __stringify_1(x...)     (const char *)#x
+#define __stringify(x...)       __stringify_1(x)
+#define func(name, args...) __stringify(name), name, ##args
+public:
+	test(T &t) {
+		std::string idx_name0 = "test" + lexical_cast(rand());
+		indexes::index<T> idx(t, idx_name0);
+
+		std::vector<indexes::key> keys;
+		test::run(this, func(&test::test_insert_many_keys, idx, keys, 1000));
+		test::run(this, func(&test::test_iterator_number, idx, keys));
+		test::run(this, func(&test::test_select_many_keys, idx, keys));
+		test::run(this, func(&test::test_intersection, t, 10, 200, 1000));
+	}
+
+private:
+
+
+	template <typename Class, typename Method, typename... Args>
+	static inline void run(Class *obj, const char *str, Method method, Args &&...args) {
+		try {
+			(obj->*method)(std::forward<Args>(args)...);
+		} catch (const std::exception &e) {
+			fprintf(stderr, "%s: failed: %s\n", str, e.what());
+			exit(-1);
+		}
+	}
+
+	void test_insert_many_keys(indexes::index<T> &idx, std::vector<indexes::key> &keys, int max) {
+		for (int i = 0; i < max; ++i) {
+			indexes::key k;
+
+			char buf[128];
+
+			snprintf(buf, sizeof(buf), "%08x.%08d", rand(), i);
+			k.id = std::string(buf);
+
+			snprintf(buf, sizeof(buf), "value.%08d", i);
+			k.value = std::string(buf);
+
+			dprintf("inserting: %s\n", k.str().c_str());
+			idx.insert(k);
+			keys.push_back(k);
+			dprintf("inserted: %s\n\n", k.str().c_str());
+		}
+	}
+
+	void test_select_many_keys(indexes::index<T> &idx, std::vector<indexes::key> &keys) {
+		for (auto it = keys.begin(); it != keys.end(); ++it) {
+			indexes::key k;
+
+			k.id = it->id;
+			indexes::key found = idx.search(k);
+			if (!found) {
+				std::ostringstream ss;
+				ss << "search failed: could not find key: " << it->id.c_str();
+				throw std::runtime_error(ss.str());
+			}
+
+			if (found.id != it->id) {
+				std::ostringstream ss;
+				ss << "search failed: ID mismatch: found: " << found << ", must be: " << *it;
+				throw std::runtime_error(ss.str());
+			}
+			if (found.value != it->value) {
+				std::ostringstream ss;
+				ss << "search failed: value mismatch: found: " << found << ", must be: " << *it;
+				throw std::runtime_error(ss.str());
+			}
+
+			dprintf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
+		}
+	}
+
+	void test_iterator_number(indexes::index<T> &idx, std::vector<indexes::key> &keys) {
+		size_t num = 0;
+		for (auto it = idx.begin(), end = idx.end(); it != end; ++it) {
+			dprintf("iterator: %s\n", it->str().c_str());
+			num++;
+		}
+
+		if (num != keys.size()) {
+			std::ostringstream ss;
+			ss << "iterated numbed mismatch: keys: " << keys.size() << ", iterated: " << num;
+			throw std::runtime_error(ss.str());
+		}
+	}
+
+	void test_intersection(T &t, int num_indexes, int same_num, int different_num) {
+		std::vector<std::string> indexes;
+		std::vector<indexes::key> same;
+
+		for (int i = 0; i < same_num; ++i) {
+			indexes::key k;
+			k.id = lexical_cast(rand()) + ".url-same-key." + lexical_cast(i);
+			k.value = "url-same-value." + lexical_cast(i);
+
+			same.emplace_back(k);
+		}
+
+		for (int i = 0; i < num_indexes; ++i) {
+			std::string name = "intersection-index.rand." + lexical_cast(i) + "." + lexical_cast(rand());
+
+			indexes.emplace_back(name);
+			indexes::index<T> idx(t, name);
+
+			for (int j = 0; j < different_num; ++j) {
+				indexes::key k;
+
+				k.id = lexical_cast(rand()) + ".url-random-key." + lexical_cast(i);
+				k.value = "url-random-value." + lexical_cast(i);
+
+				idx.insert(k);
+			}
+
+			for (auto it = same.begin(); it != same.end(); ++it) {
+				idx.insert(*it);
+			}
+		}
+
+		ribosome::timer tm;
+		indexes::intersect::intersector<T> inter(t);
+		indexes::intersect::result res = inter.intersect(indexes);
+		for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
+			dprintf("index: %s\n", it->first.c_str());
+			for (auto k = it->second.begin(); k != it->second.end(); ++k) {
+				dprintf("  %s\n", k->str().c_str());
+			}
+		}
+
+		printf("intersection: indexes: %d, found keys: %zd, must be: %d, total keys in each index: %d, time: %ld ms\n",
+				num_indexes, res.keys.size(), same_num, same_num + different_num, tm.elapsed());
+		if (res.keys.size() != (size_t)same_num) {
+			std::ostringstream ss;
+			ss << "intersection failed: indexes: " << num_indexes << ", same keys in each index: " << same_num <<
+				", found keys: " << res.keys.size() <<
+				", total keys in each index: " << different_num + same_num;
+			throw std::runtime_error(ss.str());
+		}
+	}
+};
+
 int main(int argc, char *argv[])
 {
 	namespace bpo = boost::program_options;
@@ -725,63 +1019,5 @@ int main(int argc, char *argv[])
 
 	dprintf("index: init: t: %zd\n", tm);
 
-	std::vector<indexes::key> keys;
-	int max = 1000;
-	for (int i = 0; i < max; ++i) {
-		indexes::key k;
-
-		char buf[128];
-
-		snprintf(buf, sizeof(buf), "%08x.%08d", rand(), i);
-		k.id = std::string(buf);
-
-		snprintf(buf, sizeof(buf), "value.%08d", i);
-		k.value = std::string(buf);
-
-		dprintf("inserting: %s\n", k.str().c_str());
-		idx.insert(k);
-		keys.push_back(k);
-		dprintf("inserted: %s\n\n", k.str().c_str());
-
-		indexes::key found = idx.search(k);
-		if (!found) {
-			fprintf(stderr, "search failed: could not find key: %s\n", k.id.c_str());
-			return -1;
-		}
-
-		if (found.id != k.id) {
-			fprintf(stderr, "search failed: ID mismatch: found: %s, must be: %s\n", found.id.c_str(), k.id.c_str());
-			return -1;
-		}
-		if (found.value != k.value) {
-			fprintf(stderr, "search failed: value mismatch: found: %s, must be: %s\n", found.value.c_str(), k.value.c_str());
-			return -1;
-		}
-
-		dprintf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
-	}
-
-	for (auto it = idx.begin(), end = idx.end(); it != end; ++it) {
-		dprintf("iterator: %s\n", it->str().c_str());
-	}
-
-	for (auto it = keys.begin(); it != keys.end(); ++it) {
-		indexes::key k;
-
-		k.id = it->id;
-		indexes::key found = idx.search(k);
-		if (!found) {
-			fprintf(stderr, "search failed: could not find key: %s\n", k.id.c_str());
-			return -1;
-		}
-
-		if (found.id != it->id) {
-			fprintf(stderr, "search failed: ID mismatch: found: %s, must be: %s\n", found.id.c_str(), it->id.c_str());
-		}
-		if (found.value != it->value) {
-			fprintf(stderr, "search failed: value mismatch: found: %s, must be: %s\n", found.value.c_str(), it->value.c_str());
-		}
-
-		dprintf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
-	}
+	test<elliptics_transport> tt(t);
 }
