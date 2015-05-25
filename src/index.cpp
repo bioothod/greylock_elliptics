@@ -270,6 +270,11 @@ public:
 	typedef std::ptrdiff_t difference_type;
 
 	iterator(T &t, page &p) : m_t(t), m_page(p) {}
+	iterator(const iterator &i) : m_t(i.m_t) {
+		m_page = i.m_page;
+		m_page_internal_index = i.m_page_internal_index;
+		m_page_index = i.m_page_index;
+	}
 
 	self_type operator++() {
 		++m_page_internal_index;
@@ -627,28 +632,20 @@ class intersector {
 public:
 	intersector(T &t) : m_t(t) {}
 	result intersect(const std::vector<std::string> &indexes) const {
-		typedef std::vector<key> keys_t;
 		struct iter {
-			keys_t keys;
-			keys_t::iterator begin, end;
+			index<T> idx;
+			indexes::iterator<T> begin, end;
+
+			iter(T &t, const std::string &name) : idx(t, name), begin(idx.begin()), end(idx.end()) {}
 		};
 		std::vector<iter> idata;
 
 		for_each(indexes.begin(), indexes.end(), [&] (const std::string &name) {
-				index<T> idx(m_t, name);
-
-				iter it;
-				it.keys = idx.keys();
+				iter it(m_t, name);
 
 				idata.emplace_back(it);
 			});
 
-		printf("indexes: %zd, idata: %zd\n", indexes.size(), idata.size());
-		for_each(idata.begin(), idata.end(), [&] (iter &it) {
-				it.begin = it.keys.begin();
-				it.end = it.keys.end();
-			});
-		printf("intersect: first key: %s\n", idata.back().begin->str().c_str());
 		result res;
 
 		bool completed = false;
@@ -832,10 +829,10 @@ public:
 		indexes::index<T> idx(t, idx_name0);
 
 		std::vector<indexes::key> keys;
-		test::run(this, func(&test::test_insert_many_keys, idx, keys, 1000));
-		test::run(this, func(&test::test_iterator_number, idx, keys));
-		test::run(this, func(&test::test_select_many_keys, idx, keys));
-		test::run(this, func(&test::test_intersection, t, 10, 200, 1000));
+		//test::run(this, func(&test::test_insert_many_keys, idx, keys, 1000000));
+		//test::run(this, func(&test::test_iterator_number, idx, keys));
+		//test::run(this, func(&test::test_select_many_keys, idx, keys));
+		test::run(this, func(&test::test_intersection, t, 3, 10000, 100000));
 	}
 
 private:
@@ -844,7 +841,9 @@ private:
 	template <typename Class, typename Method, typename... Args>
 	static inline void run(Class *obj, const char *str, Method method, Args &&...args) {
 		try {
+			ribosome::timer tm;
 			(obj->*method)(std::forward<Args>(args)...);
+			printf("%s: %zd ms\n", str, tm.elapsed());
 		} catch (const std::exception &e) {
 			fprintf(stderr, "%s: failed: %s\n", str, e.what());
 			exit(-1);
