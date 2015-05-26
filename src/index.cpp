@@ -269,7 +269,7 @@ public:
 	typedef std::forward_iterator_tag iterator_category;
 	typedef std::ptrdiff_t difference_type;
 
-	iterator(T &t, page &p) : m_t(t), m_page(p) {}
+	iterator(T &t, page &p, size_t internal_index = 0) : m_t(t), m_page(p), m_page_internal_index(internal_index) {}
 	iterator(const iterator &i) : m_t(i.m_t) {
 		m_page = i.m_page;
 		m_page_internal_index = i.m_page_internal_index;
@@ -632,16 +632,22 @@ class intersector {
 public:
 	intersector(T &t) : m_t(t) {}
 	result intersect(const std::vector<std::string> &indexes) const {
+		std::string start = std::string("\0");
+		return intersect(indexes, start, INT_MAX);
+	}
+
+	result intersect(const std::vector<std::string> &indexes, std::string &start, size_t num) const {
 		struct iter {
 			index<T> idx;
 			indexes::iterator<T> begin, end;
 
-			iter(T &t, const std::string &name) : idx(t, name), begin(idx.begin()), end(idx.end()) {}
+			iter(T &t, const std::string &name, const std::string &start) :
+				idx(t, name), begin(idx.begin(start)), end(idx.end()) {}
 		};
 		std::vector<iter> idata;
 
 		for_each(indexes.begin(), indexes.end(), [&] (const std::string &name) {
-				iter it(m_t, name);
+				iter it(m_t, name, start);
 
 				idata.emplace_back(it);
 			});
@@ -693,18 +699,25 @@ public:
 				continue;
 			}
 
+			start = idata[0].begin->id;
+			if (res.keys.size() == num) {
+				completed = true;
+				break;
+			}
+
+			auto find_it = res.keys.find(start);
+
 			for (auto it = pos.begin(); it != pos.end(); ++it) {
 				auto &min_it = idata[*it].begin;
 
 				key k = *min_it;
-				std::string res_idx = k.id;
 				k.id = indexes[*it];
 
-				auto find_it = res.keys.find(res_idx);
 				if (find_it == res.keys.end()) {
 					std::vector<key> kk;
 					kk.emplace_back(k);
-					res.keys[res_idx] = kk;
+					auto pair = res.keys.insert(std::make_pair(start, kk));
+					find_it = pair.first;
 				} else {
 					find_it->second.emplace_back(k);
 				}
@@ -832,7 +845,7 @@ public:
 		//test::run(this, func(&test::test_insert_many_keys, idx, keys, 1000000));
 		//test::run(this, func(&test::test_iterator_number, idx, keys));
 		//test::run(this, func(&test::test_select_many_keys, idx, keys));
-		test::run(this, func(&test::test_intersection, t, 3, 10000, 100000));
+		test::run(this, func(&test::test_intersection, t, 3, 5000, 10000));
 	}
 
 private:
@@ -910,11 +923,11 @@ private:
 		}
 	}
 
-	void test_intersection(T &t, int num_indexes, int same_num, int different_num) {
+	void test_intersection(T &t, int num_indexes, size_t same_num, size_t different_num) {
 		std::vector<std::string> indexes;
 		std::vector<indexes::key> same;
 
-		for (int i = 0; i < same_num; ++i) {
+		for (size_t i = 0; i < same_num; ++i) {
 			indexes::key k;
 			k.id = lexical_cast(rand()) + ".url-same-key." + lexical_cast(i);
 			k.value = "url-same-value." + lexical_cast(i);
@@ -928,7 +941,7 @@ private:
 			indexes.emplace_back(name);
 			indexes::index<T> idx(t, name);
 
-			for (int j = 0; j < different_num; ++j) {
+			for (size_t j = 0; j < different_num; ++j) {
 				indexes::key k;
 
 				k.id = lexical_cast(rand()) + ".url-random-key." + lexical_cast(i);
@@ -952,12 +965,43 @@ private:
 			}
 		}
 
-		printf("intersection: indexes: %d, found keys: %zd, must be: %d, total keys in each index: %d, time: %ld ms\n",
-				num_indexes, res.keys.size(), same_num, same_num + different_num, tm.elapsed());
-		if (res.keys.size() != (size_t)same_num) {
+		printf("intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
+				num_indexes, res.keys.size(), same_num, same_num + different_num, tm.restart());
+		if (res.keys.size() != same_num) {
 			std::ostringstream ss;
 			ss << "intersection failed: indexes: " << num_indexes << ", same keys in each index: " << same_num <<
 				", found keys: " << res.keys.size() <<
+				", total keys in each index: " << different_num + same_num;
+			throw std::runtime_error(ss.str());
+		}
+
+		indexes::intersect::intersector<T> p(t);
+		std::string start("\0");
+		size_t num = 100;
+		size_t num_found = 0;
+
+		while (true) {
+			indexes::intersect::result res = p.intersect(indexes, start, num);
+
+			num_found += res.keys.size();
+
+			for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
+				printf("index: %s, keys: %zd, total keys found: %zd\n", it->first.c_str(), res.keys.size(), num_found);
+				for (auto k = it->second.begin(); k != it->second.end(); ++k) {
+					dprintf("  %s\n", k->str().c_str());
+				}
+			}
+
+			if (res.keys.size() < num)
+				break;
+		}
+
+		printf("paginated intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
+				num_indexes, num_found, same_num, same_num + different_num, tm.restart());
+		if (num_found != same_num) {
+			std::ostringstream ss;
+			ss << "paginated intersection failed: indexes: " << num_indexes << ", same keys in each index: " << same_num <<
+				", found keys: " << num_found <<
 				", total keys in each index: " << different_num + same_num;
 			throw std::runtime_error(ss.str());
 		}
