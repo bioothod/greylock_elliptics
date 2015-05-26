@@ -325,11 +325,16 @@ struct index_meta {
 	int page_index = 0;
 	int num_pages = 0;
 	uint64_t num_leaf_pages = 0;
+	uint64_t generation_number = 0;
 
-	MSGPACK_DEFINE(page_index, num_pages, num_leaf_pages);
+	MSGPACK_DEFINE(page_index, num_pages, num_leaf_pages, generation_number);
 
 	bool operator != (const index_meta &other) const {
-		return ((page_index != other.page_index) || (num_pages != other.num_pages) || (num_leaf_pages != other.num_leaf_pages));
+		return ((page_index != other.page_index) ||
+				(num_pages != other.num_pages) ||
+				(num_leaf_pages != other.num_leaf_pages) ||
+				(generation_number != other.generation_number)
+			);
 	}
 };
 
@@ -372,13 +377,11 @@ public:
 	}
 
 	void insert(const key &obj) {
-		index_meta old = m_meta;
 		recursion tmp;
 		insert(m_sk, obj, tmp);
 
-		if (m_meta != old) {
-			meta_write();
-		}
+		m_meta.generation_number++;
+		meta_write();
 	}
 
 	iterator<T> begin(const std::string &k) const {
