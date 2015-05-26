@@ -152,52 +152,49 @@ struct page {
 		return ss.str();
 	}
 
-	key search_leaf(const key &obj) const {
+	// return position of the given key in @objects vector
+	int search_leaf(const key &obj) const {
 		if (!is_leaf()) {
-			return key();
+			return -1;
 		}
 
+		int pos = 0;
 		for (auto it = objects.begin(); it != objects.end(); ++it) {
 			if (obj.id == it->id) {
-				return *it;
+				return pos;
 			}
+
+			++pos;
 		}
 
-		return key();
+		return -1;
 	}
 
-	bool replace(const key &src, const key &dst) {
-		for (auto it = objects.begin(); it != objects.end(); ++it) {
-			if (src.id == it->id) {
-				dprintf("p: %s: replace: %s -> %s\n", str().c_str(), it->str().c_str(), dst.str().c_str());
-				it->id = dst.id;
-				return true;
-			}
-		}
-
-		dprintf("p: %s: replace failed: %s -> %s\n", str().c_str(), src.str().c_str(), dst.str().c_str());
-		return false;
-	}
-
-	key search_node(const key &obj) const {
+	// returns position of the key in @objects vector
+	int search_node(const key &obj) const {
 		if (objects.size() == 0)
-			return key();
+			return -1;
 
 		if (is_leaf()) {
 			return search_leaf(obj);
 		}
 
 		key prev = objects.front();
+		int prev_position = -1;
 
 		for (auto it = objects.begin(); it != objects.end(); ++it) {
 			if (obj.id < it->id) {
-				return prev;
+				if (prev_position < 0)
+					return 0;
+
+				return prev_position;
 			}
 
 			prev = *it;
+			++prev_position;
 		}
 
-		return objects.back();
+		return objects.size() - 1;
 	}
 
 	bool insert_and_split(const key &obj, page &other) {
@@ -269,7 +266,7 @@ public:
 	typedef std::forward_iterator_tag iterator_category;
 	typedef std::ptrdiff_t difference_type;
 
-	iterator(T &t, page &p, size_t internal_index = 0) : m_t(t), m_page(p), m_page_internal_index(internal_index) {}
+	iterator(T &t, page &p, size_t internal_index) : m_t(t), m_page(p), m_page_internal_index(internal_index) {}
 	iterator(const iterator &i) : m_t(i.m_t) {
 		m_page = i.m_page;
 		m_page_internal_index = i.m_page_internal_index;
@@ -368,7 +365,10 @@ public:
 
 	key search(const key &obj) const {
 		auto found = search(m_sk, obj);
-		return found.first;
+		if (found.second < 0)
+			return key();
+
+		return found.first.objects[found.second];
 	}
 
 	void insert(const key &obj) {
@@ -386,7 +386,10 @@ public:
 		zero.id = k;
 
 		auto found = search(m_sk, zero);
-		return iterator<T>(m_t, found.second);
+		if (found.second < 0)
+			found.second = 0;
+
+		return iterator<T>(m_t, found.first, found.second);
 	}
 
 	iterator<T> begin() const {
@@ -395,7 +398,7 @@ public:
 
 	iterator<T> end() const {
 		page p;
-		return iterator<T>(m_t, p);
+		return iterator<T>(m_t, p, 0);
 	}
 
 	std::vector<key> keys(const std::string &start) const {
@@ -444,26 +447,31 @@ private:
 		}
 	}
 
-	std::pair<key, page> search(const std::string &page_key, const key &obj) const {
+	std::pair<page, int> search(const std::string &page_key, const key &obj) const {
 		std::string data = m_t.read(page_key);
 
 		page p;
 		p.load(data.data(), data.size());
 
-		key found = p.search_node(obj);
+		int found_pos = p.search_node(obj);
+		if (found_pos < 0) {
+			dprintf("search: %s: page: %s -> %s, found_pos: %d\n",
+				obj.str().c_str(),
+				page_key.c_str(), p.str().c_str(),
+				found_pos);
 
-		dprintf("search: %s: page: %s -> %s, found: %s\n",
+			return std::make_pair(p, found_pos);
+		}
+
+		dprintf("search: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
 			obj.str().c_str(),
 			page_key.c_str(), p.str().c_str(),
-			found.str().c_str());
-
-		if (!found)
-			return std::make_pair(found, p);
+			found_pos, p.objects[found_pos].str().c_str());
 
 		if (p.is_leaf())
-			return std::make_pair(found, p);
+			return std::make_pair(p, found_pos);
 
-		return search(found.value, obj);
+		return search(p.objects[found_pos].value, obj);
 	}
 
 	// returns true if page at @page_key has been split after insertion
@@ -484,13 +492,13 @@ private:
 
 
 		if (!p.is_leaf()) {
-			key found = p.search_node(obj);
-			dprintf("insert: %s: page: %s -> %s, found: %s\n",
-				obj.str().c_str(),
-				page_key.c_str(), p.str().c_str(),
-				found.str().c_str());
+			int found_pos = p.search_node(obj);
+			if (found_pos < 0) {
+				dprintf("insert: %s: page: %s -> %s, found_pos: %d\n",
+					obj.str().c_str(),
+					page_key.c_str(), p.str().c_str(),
+					found_pos);
 
-			if (!found) {
 				// this is not a leaf node, but there is no leaf in @objects
 				// this is the only reason non-leaf page search failed,
 				// thus create new leaf node
@@ -519,12 +527,19 @@ private:
 				return;
 			}
 
+			key &found = p.objects[found_pos];
+
+			dprintf("insert: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
+				obj.str().c_str(),
+				page_key.c_str(), p.str().c_str(),
+				found_pos, found.str().c_str());
+
 			insert(found.value, obj, rec);
 
-			dprintf("insert: %s: returned: %s -> %s, found: %s, rec: page_start: %s, split_key: %s\n",
+			dprintf("insert: %s: returned: %s -> %s, found_pos: %d, found_key: %s, rec: page_start: %s, split_key: %s\n",
 					obj.str().c_str(),
 					page_key.c_str(), p.str().c_str(),
-					found.str().c_str(),
+					found_pos, found.str().c_str(),
 					rec.page_start.str().c_str(),
 					rec.split_key.str().c_str());
 
@@ -533,7 +548,9 @@ private:
 			bool want_return = true;
 
 			if (found != rec.page_start) {
-				p.replace(found, rec.page_start);
+				dprintf("p: %s: replace: key: %s: id: %s -> %s\n",
+						p.str().c_str(), found.str().c_str(), found.id.c_st(), rec.page_start.c_str());
+				p.objects[found_pos].id = rec.page_start;
 
 				// page has changed, it must be written into storage
 				want_return = false;
@@ -624,6 +641,7 @@ private:
 
 namespace intersect {
 struct result {
+	bool completed = false;
 	std::map<std::string, std::vector<key>> keys;
 };
 
@@ -636,6 +654,17 @@ public:
 		return intersect(indexes, start, INT_MAX);
 	}
 
+	// search for intersections between all @indexes
+	// starting with the key @start, returning at most @num entries
+	//
+	// after @intersect() completes, it sets @start to the next key to start searching from
+	// user should not change that token, otherwise @intersect() may skip some entries or
+	// return duplicates.
+	//
+	// if number of returned entries is less than requested number @num or if @start has been set to empty string
+	// after call to this function returns, then intersection is completed.
+	//
+	// @result.completed will be set to true in this case.
 	result intersect(const std::vector<std::string> &indexes, std::string &start, size_t num) const {
 		struct iter {
 			index<T> idx;
@@ -654,8 +683,7 @@ public:
 
 		result res;
 
-		bool completed = false;
-		while (!completed) {
+		while (!res.completed) {
 			std::vector<int> pos;
 
 			int current = -1;
@@ -665,7 +693,7 @@ public:
 				++current;
 
 				if (it == e) {
-					completed = true;
+					res.completed = true;
 					break;
 				}
 
@@ -687,8 +715,10 @@ public:
 				}
 			}
 
-			if (completed)
+			if (res.completed) {
+				start = "";
 				break;
+			}
 
 			if (pos.size() != idata.size()) {
 				for (auto it = pos.begin(); it != pos.end(); ++it) {
@@ -699,9 +729,8 @@ public:
 				continue;
 			}
 
-			start = idata[0].begin->id;
+			start = idata[pos[0]].begin->id;
 			if (res.keys.size() == num) {
-				completed = true;
 				break;
 			}
 
@@ -986,13 +1015,16 @@ private:
 			num_found += res.keys.size();
 
 			for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
-				printf("index: %s, keys: %zd, total keys found: %zd\n", it->first.c_str(), res.keys.size(), num_found);
+				dprintf("index: %s, keys: %zd, total keys found: %zd\n", it->first.c_str(), res.keys.size(), num_found);
 				for (auto k = it->second.begin(); k != it->second.end(); ++k) {
 					dprintf("  %s\n", k->str().c_str());
 				}
 			}
 
 			if (res.keys.size() < num)
+				break;
+
+			if (res.completed)
 				break;
 		}
 
