@@ -158,16 +158,14 @@ struct page {
 			return -1;
 		}
 
-		int pos = 0;
-		for (auto it = objects.begin(); it != objects.end(); ++it) {
-			if (obj.id == it->id) {
-				return pos;
-			}
+		auto it = std::lower_bound(objects.begin(), objects.end(), obj);
+		if (it == objects.end())
+			return -1;
 
-			++pos;
-		}
+		if (*it != obj)
+			return -1;
 
-		return -1;
+		return it - objects.begin();
 	}
 
 	// returns position of the key in @objects vector
@@ -179,22 +177,19 @@ struct page {
 			return search_leaf(obj);
 		}
 
-		key prev = objects.front();
-		int prev_position = -1;
-
-		for (auto it = objects.begin(); it != objects.end(); ++it) {
-			if (obj.id < it->id) {
-				if (prev_position < 0)
-					return 0;
-
-				return prev_position;
-			}
-
-			prev = *it;
-			++prev_position;
+		if (obj <= objects.front()) {
+			return 0;
 		}
 
-		return objects.size() - 1;
+		auto it = std::lower_bound(objects.begin(), objects.end(), obj);
+		if (it == objects.end()) {
+			return objects.size() - 1;
+		}
+
+		if (*it == obj)
+			return it - objects.begin();
+
+		return (it - objects.begin()) - 1;
 	}
 
 	bool insert_and_split(const key &obj, page &other) {
@@ -957,7 +952,7 @@ public:
 		indexes::index<T> idx(t, idx_name0);
 
 		std::vector<indexes::key> keys;
-		test::run(this, func(&test::test_insert_many_keys, idx, keys, 1000000));
+		test::run(this, func(&test::test_insert_many_keys, idx, keys, 10000));
 		test::run(this, func(&test::test_page_iterator, idx));
 		test::run(this, func(&test::test_iterator_number, idx, keys));
 		test::run(this, func(&test::test_select_many_keys, idx, keys));
