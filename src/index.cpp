@@ -257,6 +257,64 @@ struct page {
 };
 
 template <typename T>
+class page_iterator {
+public:
+	typedef page_iterator self_type;
+	typedef page value_type;
+	typedef page& reference;
+	typedef page* pointer;
+	typedef std::forward_iterator_tag iterator_category;
+	typedef std::ptrdiff_t difference_type;
+
+	page_iterator(T &t, page &p) : m_t(t), m_page(p) {}
+	page_iterator(const page_iterator &i) : m_t(i.m_t) {
+		m_page = i.m_page;
+		m_page_index = i.m_page_index;
+	}
+
+	self_type operator++() {
+		try_loading_next_page();
+
+		return *this;
+	}
+
+	self_type operator++(int num) {
+		try_loading_next_page();
+
+		return *this;
+	}
+
+	reference operator*() {
+		return m_page;
+	}
+	pointer operator->() {
+		return &m_page;
+	}
+
+	bool operator==(const self_type& rhs) {
+		return m_page == rhs.m_page;
+	}
+	bool operator!=(const self_type& rhs) {
+		return m_page != rhs.m_page;
+	}
+private:
+	T &m_t;
+	page m_page;
+	size_t m_page_index = 0;
+
+	void try_loading_next_page() {
+		++m_page_index;
+
+		if (m_page.next.empty()) {
+			m_page = page();
+		} else {
+			std::string p = m_t.read(m_page.next);
+			m_page.load(p.data(), p.size());
+		}
+	}
+};
+
+template <typename T>
 class iterator {
 public:
 	typedef iterator self_type;
@@ -295,10 +353,10 @@ public:
 	}
 
 	bool operator==(const self_type& rhs) {
-		return m_page == rhs.m_page;
+		return (m_page == rhs.m_page) && (m_page_internal_index == rhs.m_page_internal_index);
 	}
 	bool operator!=(const self_type& rhs) {
-		return m_page != rhs.m_page;
+		return (m_page != rhs.m_page) || (m_page_internal_index != rhs.m_page_internal_index);
 	}
 private:
 	T &m_t;
@@ -322,8 +380,8 @@ private:
 };
 
 struct index_meta {
-	int page_index = 0;
-	int num_pages = 0;
+	uint64_t page_index = 0;
+	uint64_t num_pages = 0;
 	uint64_t num_leaf_pages = 0;
 	uint64_t generation_number = 0;
 
@@ -335,6 +393,15 @@ struct index_meta {
 				(num_leaf_pages != other.num_leaf_pages) ||
 				(generation_number != other.generation_number)
 			);
+	}
+
+	std::string str() const {
+		std::ostringstream ss;
+		ss << "page_index: " << page_index <<
+			", num_pages: " << num_pages <<
+			", num_leaf_pages: " << num_leaf_pages <<
+			", generation_number: " << generation_number;
+		return ss.str();
 	}
 };
 
@@ -366,6 +433,10 @@ public:
 
 	~index() {
 		meta_write();
+	}
+
+	index_meta meta() const {
+		return m_meta;
 	}
 
 	key search(const key &obj) const {
@@ -422,6 +493,19 @@ public:
 		return ret;
 	}
 
+	page_iterator<T> page_begin() const {
+		page p;
+		std::string data = m_t.read(m_sk);
+		p.load(data.data(), data.size());
+
+		return page_iterator<T>(m_t, p);
+	}
+
+	page_iterator<T> page_end() const {
+		page p;
+		return page_iterator<T>(m_t, p);
+	}
+
 private:
 	T &m_t;
 	std::string m_sk;
@@ -447,6 +531,7 @@ private:
 			fprintf(stderr, "index: could not read start key: %s\n", e.what());
 
 			m_t.write(m_sk, start_page.save());
+			m_meta.num_pages++;
 		}
 	}
 
@@ -489,11 +574,6 @@ private:
 
 		dprintf("insert: %s: page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
 
-		key tmp_start_key = obj;
-		if (!p.is_empty())
-			tmp_start_key = p.objects.front();
-
-
 		if (!p.is_leaf()) {
 			int found_pos = p.search_node(obj);
 			if (found_pos < 0) {
@@ -518,6 +598,7 @@ private:
 				// no need to perform recursion unwind, since there were no entry for this new leaf
 				// which can only happen when page was originally empty
 				p.insert_and_split(leaf_key, unused_split);
+				p.next = leaf_key.value;
 				m_t.write(page_key, p.save());
 
 				dprintf("insert: %s: page: %s -> %s, leaf: %s -> %s\n",
@@ -552,8 +633,8 @@ private:
 
 			if (found != rec.page_start) {
 				dprintf("p: %s: replace: key: %s: id: %s -> %s\n",
-						p.str().c_str(), found.str().c_str(), found.id.c_st(), rec.page_start.c_str());
-				p.objects[found_pos].id = rec.page_start;
+						p.str().c_str(), found.str().c_str(), found.id.c_str(), rec.page_start.id.c_str());
+				found.id = rec.page_start.id;
 
 				// page has changed, it must be written into storage
 				want_return = false;
@@ -616,6 +697,8 @@ private:
 			new_root.insert_and_split(old_root_key, unused_split);
 			new_root.insert_and_split(rec.split_key, unused_split);
 
+			new_root.next = new_root.objects.front().value;
+
 			m_t.write(m_sk, new_root.save());
 
 			m_meta.num_pages++;
@@ -635,7 +718,7 @@ private:
 	std::string generate_page_key() {
 		char buf[128 + m_sk.size()];
 
-		snprintf(buf, sizeof(buf), "%s.%d", m_sk.c_str(), m_meta.page_index);
+		snprintf(buf, sizeof(buf), "%s.%llu", m_sk.c_str(), (unsigned long long)m_meta.page_index);
 		dprintf("generated key: %s\n", buf);
 		m_meta.page_index++;
 		return std::string(buf);
@@ -874,15 +957,14 @@ public:
 		indexes::index<T> idx(t, idx_name0);
 
 		std::vector<indexes::key> keys;
-		//test::run(this, func(&test::test_insert_many_keys, idx, keys, 1000000));
-		//test::run(this, func(&test::test_iterator_number, idx, keys));
-		//test::run(this, func(&test::test_select_many_keys, idx, keys));
+		test::run(this, func(&test::test_insert_many_keys, idx, keys, 1000000));
+		test::run(this, func(&test::test_page_iterator, idx));
+		test::run(this, func(&test::test_iterator_number, idx, keys));
+		test::run(this, func(&test::test_select_many_keys, idx, keys));
 		test::run(this, func(&test::test_intersection, t, 3, 5000, 10000));
 	}
 
 private:
-
-
 	template <typename Class, typename Method, typename... Args>
 	static inline void run(Class *obj, const char *str, Method method, Args &&...args) {
 		try {
@@ -951,6 +1033,39 @@ private:
 		if (num != keys.size()) {
 			std::ostringstream ss;
 			ss << "iterated numbed mismatch: keys: " << keys.size() << ", iterated: " << num;
+			throw std::runtime_error(ss.str());
+		}
+	}
+
+	void test_page_iterator(indexes::index<T> &idx) {
+		size_t page_num = 0;
+		size_t leaf_num = 0;
+		for (auto it = idx.page_begin(), end = idx.page_end(); it != end; ++it) {
+			dprintf("page: %s\n", it->str().c_str());
+			page_num++;
+			if (it->is_leaf())
+				leaf_num++;
+		}
+		indexes::index_meta meta = idx.meta();
+		printf("meta: %s\n", meta.str().c_str());
+
+		if (page_num != meta.num_pages) {
+			std::ostringstream ss;
+			ss << "page iterator: number of pages mismatch: "
+				"meta: " << meta.str() <<
+				"iterated: number of pages: " << page_num <<
+				", number of leaf pages: " << leaf_num <<
+				std::endl;
+			throw std::runtime_error(ss.str());
+		}
+
+		if (leaf_num != meta.num_leaf_pages) {
+			std::ostringstream ss;
+			ss << "page iterator: number of leaf pages mismatch: "
+				"meta: " << meta.str() <<
+				"iterated: number of pages: " << page_num <<
+				", number of leaf pages: " << leaf_num <<
+				std::endl;
 			throw std::runtime_error(ss.str());
 		}
 	}
