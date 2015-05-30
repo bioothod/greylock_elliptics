@@ -262,7 +262,7 @@ public:
 	typedef std::ptrdiff_t difference_type;
 
 	page_iterator(T &t, const page &p) : m_t(t), m_page(p) {}
-	page_iterator(T &t, const std::string &path) : m_t(t) {
+	page_iterator(T &t, const std::string &path) : m_t(t), m_path(path) {
 		elliptics::read_result_entry e = m_t.read(path);
 		if (e.error())
 			return;
@@ -500,8 +500,9 @@ public:
 		if (recovery_groups.empty())
 			return;
 
+		size_t pages_recovered = 0;
 		for (auto it = page_begin(), end = page_end(); it != end; ++it) {
-			dprintf("page: %s: %s\n", it.path().c_str(), it->str().c_str());
+			dprintf("page: %s: %s -> %s\n", it.path().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
 
 			elliptics::sync_write_result wr = m_t.write(recovery_groups, it.path(), it->save(), false);
 			
@@ -514,13 +515,16 @@ public:
 
 			if (recovery_groups.size() == 0)
 				break;
+
+			pages_recovered++;
 		}
 
 		good_groups.insert(good_groups.end(), recovery_groups.begin(), recovery_groups.end());
 		m_t.set_groups(good_groups);
 
 		meta_write();
-		dprintf("index: opened: page_index: %d\n", m_meta.page_index);
+		printf("index: opened: page_index: %ld, groups: %s, pages recovered: %zd\n",
+				m_meta.page_index, print_groups(m_t.get_groups()).c_str(), pages_recovered);
 	}
 
 	~index() {
@@ -596,6 +600,17 @@ public:
 	page_iterator<T> page_end() const {
 		page p;
 		return page_iterator<T>(m_t, p);
+	}
+
+	std::string print_groups(const std::vector<int> &groups) const {
+		std::ostringstream ss;
+		for (size_t pos = 0; pos < groups.size(); ++pos) {
+			ss << groups[pos];
+			if (pos != groups.size() - 1)
+				ss << ":";
+		}
+
+		return ss.str();
 	}
 
 private:
@@ -992,6 +1007,10 @@ public:
 		m_groups = groups;
 	}
 
+	std::vector<int> get_groups() const {
+		return m_groups;
+	}
+
 	elliptics::read_result_entry read(const std::string &key) {
 		dprintf("elliptics read: key: %s\n", key.c_str());
 		elliptics::session s = session(m_groups, true);
@@ -1088,6 +1107,8 @@ public:
 		indexes::index<T> idx(t, idx_name0);
 
 		std::vector<indexes::key> keys;
+		if (t.get_groups().size() > 1)
+			test::run(this, func(&test::test_index_recovery, t, 10000));
 		test::run(this, func(&test::test_insert_many_keys, idx, keys, 10000));
 		test::run(this, func(&test::test_page_iterator, idx));
 		test::run(this, func(&test::test_iterator_number, idx, keys));
@@ -1125,6 +1146,75 @@ private:
 			keys.push_back(k);
 			dprintf("inserted: %s\n\n", k.str().c_str());
 		}
+	}
+
+	void test_index_recovery(T &t, int max) {
+		std::vector<int> groups = t.get_groups();
+
+		std::string name = "recovery-test." + lexical_cast(rand());
+		indexes::index<T> idx(t, name);
+
+		std::vector<indexes::key> keys;
+
+		for (int i = 0; i < max; ++i) {
+			indexes::key k;
+			k.id = lexical_cast(rand()) + ".recovery-key." + lexical_cast(i);
+			k.value = "recovery-value." + lexical_cast(i);
+
+			int err = idx.insert(k);
+			if (!err) {
+				keys.push_back(k);
+			}
+
+			if (i == max / 2) {
+				groups = t.get_groups();
+				std::vector<int> tmp;
+				tmp.insert(tmp.end(), groups.begin(), groups.begin() + groups.size() / 2);
+				t.set_groups(tmp);
+			}
+		}
+
+		t.set_groups(groups);
+		ribosome::timer tm;
+		// index constructor self-heals itself
+		indexes::index<T> rec(t, name);
+
+		groups = t.get_groups();
+		std::vector<int> tmp;
+		tmp.insert(tmp.end(), groups.begin() + groups.size() / 2, groups.end());
+		t.set_groups(tmp);
+
+		printf("recovery: index has been self-healed, records: %d, time: %ld ms, meta: %s, reading from groups: %s\n",
+				max, tm.elapsed(), rec.meta().str().c_str(), rec.print_groups(t.get_groups()).c_str());
+
+
+		for (auto it = keys.begin(); it != keys.end(); ++it) {
+			indexes::key s;
+			s.id = it->id;
+
+			indexes::key found = rec.search(s);
+			if (!found) {
+				std::ostringstream ss;
+				ss << "search failed: could not find key: " << it->id.c_str();
+				throw std::runtime_error(ss.str());
+			}
+
+			if (found.id != it->id) {
+				std::ostringstream ss;
+				ss << "search failed: ID mismatch: found: " << found << ", must be: " << *it;
+				throw std::runtime_error(ss.str());
+			}
+
+			if (found.value != it->value) {
+				std::ostringstream ss;
+				ss << "search failed: value mismatch: found: " << found << ", must be: " << *it;
+				throw std::runtime_error(ss.str());
+			}
+
+			dprintf("search: key: %s, value: %s\n", found.id.c_str(), found.value.c_str());
+		}
+
+		t.set_groups(groups);
 	}
 
 	void test_select_many_keys(indexes::index<T> &idx, std::vector<indexes::key> &keys) {
