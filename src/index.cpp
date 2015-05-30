@@ -128,7 +128,7 @@ struct page {
 		return flags & PAGE_LEAF;
 	}
 
-	void load(const char *data, size_t size) {
+	void load(const void *data, size_t size) {
 		objects.clear();
 		flags = 0;
 		next.clear();
@@ -136,7 +136,7 @@ struct page {
 
 		msgpack::unpacked result;
 
-		msgpack::unpack(&result, data, size);
+		msgpack::unpack(&result, (const char *)data, size);
 		msgpack::object obj = result.get();
 		obj.convert(this);
 
@@ -261,7 +261,14 @@ public:
 	typedef std::forward_iterator_tag iterator_category;
 	typedef std::ptrdiff_t difference_type;
 
-	page_iterator(T &t, page &p) : m_t(t), m_page(p) {}
+	page_iterator(T &t, const page &p) : m_t(t), m_page(p) {}
+	page_iterator(T &t, const std::string &path) : m_t(t) {
+		elliptics::read_result_entry e = m_t.read(path);
+		if (e.error())
+			return;
+
+		m_page.load(e.file().data(), e.file().size());
+	}
 	page_iterator(const page_iterator &i) : m_t(i.m_t) {
 		m_page = i.m_page;
 		m_page_index = i.m_page_index;
@@ -292,19 +299,31 @@ public:
 	bool operator!=(const self_type& rhs) {
 		return m_page != rhs.m_page;
 	}
+
+	std::string path() const {
+		return m_path;
+	}
+
 private:
 	T &m_t;
 	page m_page;
 	size_t m_page_index = 0;
+	std::string m_path;
 
 	void try_loading_next_page() {
 		++m_page_index;
 
 		if (m_page.next.empty()) {
 			m_page = page();
+			m_path = "";
 		} else {
-			std::string p = m_t.read(m_page.next);
-			m_page.load(p.data(), p.size());
+			m_path = m_page.next;
+			elliptics::read_result_entry e = m_t.read(m_path);
+			if (e.error()) {
+				m_page = page();
+				return;
+			}
+			m_page.load(e.file().data(), e.file().size());
 		}
 	}
 };
@@ -367,8 +386,12 @@ private:
 			if (m_page.next.empty()) {
 				m_page = page();
 			} else {
-				std::string p = m_t.read(m_page.next);
-				m_page.load(p.data(), p.size());
+				elliptics::read_result_entry e = m_t.read(m_page.next);
+				if (e.error()) {
+					m_page = page();
+					return;
+				}
+				m_page.load(e.file().data(), e.file().size());
 			}
 		}
 	}
@@ -409,20 +432,94 @@ template <typename T>
 class index {
 public:
 	index(T &t, const std::string &sk): m_t(t), m_sk(sk) {
-		try {
-			std::string meta = m_t.read(meta_key());
+		std::vector<elliptics::read_result_entry> meta = m_t.read_all(meta_key());
 
-			msgpack::unpacked result;
-			msgpack::unpack(&result, meta.data(), meta.size());
-			msgpack::object obj = result.get();
-			m_meta = obj.as<index_meta>();
-		} catch (const std::exception &e) {
-			fprintf(stderr, "index: could not read index metadata: %s\n", e.what());
+		struct separate_index_meta {
+			int group = 0;
+			index_meta meta;
+		};
 
-			start_page_init();
-			meta_write();
+		std::vector<separate_index_meta> mg;
+
+		for (auto it = meta.begin(), end = meta.end(); it != end; ++it) {
+			if (!it->is_valid()) {
+				continue;
+			}
+
+			separate_index_meta tmp;
+
+			if (!it->error()) {
+				msgpack::unpacked result;
+				msgpack::unpack(&result, (const char *)it->file().data(), it->file().size());
+				msgpack::object obj = result.get();
+
+				tmp.meta = obj.as<index_meta>();
+			} else if (it->error().code() == -6) {
+				// do not even try to work with non-existing groups
+				// next time will try to recover this group, if we reconnect
+				continue;
+			}
+
+			tmp.group = it->command()->id.group_id;
+
+			mg.emplace_back(tmp);
 		}
 
+		if (mg.empty()) {
+			start_page_init();
+			meta_write();
+			return;
+		}
+
+		uint64_t highest_generation_number = 0;
+		for (auto it = mg.begin(), end = mg.end(); it != end; ++it) {
+			if (it->meta.generation_number >= highest_generation_number) {
+				highest_generation_number = it->meta.generation_number;
+				m_meta = it->meta;
+			}
+		}
+
+		std::vector<int> recovery_groups;
+		std::vector<int> good_groups;
+		for (auto it = mg.begin(), end = mg.end(); it != end; ++it) {
+			if (it->meta.generation_number == highest_generation_number) {
+				good_groups.push_back(it->group);
+			} else {
+				recovery_groups.push_back(it->group);
+			}
+		}
+
+		m_t.set_groups(good_groups);
+
+		if (highest_generation_number == 0) {
+			start_page_init();
+			meta_write();
+			return;
+		}
+
+		if (recovery_groups.empty())
+			return;
+
+		for (auto it = page_begin(), end = page_end(); it != end; ++it) {
+			dprintf("page: %s: %s\n", it.path().c_str(), it->str().c_str());
+
+			elliptics::sync_write_result wr = m_t.write(recovery_groups, it.path(), it->save(), false);
+			
+			recovery_groups.clear();
+			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
+				if (r->is_valid() && !r->error()) {
+					recovery_groups.push_back(r->command()->id.group_id);
+				}
+			}
+
+			if (recovery_groups.size() == 0)
+				break;
+		}
+
+		good_groups.insert(good_groups.end(), recovery_groups.begin(), recovery_groups.end());
+		m_t.set_groups(good_groups);
+
+		meta_write();
 		dprintf("index: opened: page_index: %d\n", m_meta.page_index);
 	}
 
@@ -442,12 +539,16 @@ public:
 		return found.first.objects[found.second];
 	}
 
-	void insert(const key &obj) {
+	int insert(const key &obj) {
 		recursion tmp;
-		insert(m_sk, obj, tmp);
+		int ret = insert(m_sk, obj, tmp);
+		if (ret < 0)
+			return ret;
 
 		m_meta.generation_number++;
 		meta_write();
+
+		return 0;
 	}
 
 	iterator<T> begin(const std::string &k) const {
@@ -489,11 +590,7 @@ public:
 	}
 
 	page_iterator<T> page_begin() const {
-		page p;
-		std::string data = m_t.read(m_sk);
-		p.load(data.data(), data.size());
-
-		return page_iterator<T>(m_t, p);
+		return page_iterator<T>(m_t, m_sk);
 	}
 
 	page_iterator<T> page_end() const {
@@ -520,21 +617,18 @@ private:
 	void start_page_init() {
 		page start_page;
 
-		try {
-			std::string start = m_t.read(m_sk);
-		} catch (const std::exception &e) {
-			fprintf(stderr, "index: could not read start key: %s\n", e.what());
-
-			m_t.write(m_sk, start_page.save());
-			m_meta.num_pages++;
-		}
+		m_t.write(m_sk, start_page.save());
+		m_meta.num_pages++;
 	}
 
 	std::pair<page, int> search(const std::string &page_key, const key &obj) const {
-		std::string data = m_t.read(page_key);
+		elliptics::read_result_entry e = m_t.read(page_key);
+		if (e.error()) {
+			return std::make_pair(page(), e.error().code());
+		}
 
 		page p;
-		p.load(data.data(), data.size());
+		p.load(e.file().data(), e.file().size());
 
 		int found_pos = p.search_node(obj);
 		if (found_pos < 0) {
@@ -559,11 +653,15 @@ private:
 
 	// returns true if page at @page_key has been split after insertion
 	// key used to store split part has been saved into @obj.value
-	void insert(const std::string &page_key, const key &obj, recursion &rec) {
-		std::string data = m_t.read(page_key);
+	int insert(const std::string &page_key, const key &obj, recursion &rec) {
+		elliptics::read_result_entry e = m_t.read(page_key);
+		if (e.error()) {
+			return e.error().code();
+		}
 
+		int err;
 		page p;
-		p.load(data.data(), data.size());
+		p.load(e.file().data(), e.file().size());
 
 		page split;
 
@@ -588,13 +686,17 @@ private:
 
 				page leaf(true), unused_split;
 				leaf.insert_and_split(obj, unused_split);
-				m_t.write(leaf_key.value, leaf.save());
+				err = check(m_t.write(leaf_key.value, leaf.save()));
+				if (err)
+					return err;
 
 				// no need to perform recursion unwind, since there were no entry for this new leaf
 				// which can only happen when page was originally empty
 				p.insert_and_split(leaf_key, unused_split);
 				p.next = leaf_key.value;
-				m_t.write(page_key, p.save());
+				err = check(m_t.write(page_key, p.save()));
+				if (err)
+					return err;
 
 				dprintf("insert: %s: page: %s -> %s, leaf: %s -> %s\n",
 						obj.str().c_str(),
@@ -603,7 +705,7 @@ private:
 
 				m_meta.num_pages++;
 				m_meta.num_leaf_pages++;
-				return;
+				return 0;
 			}
 
 			key &found = p.objects[found_pos];
@@ -646,7 +748,7 @@ private:
 			if (want_return) {
 				rec.page_start = p.objects.front();
 				rec.split_key = key();
-				return;
+				return 0;
 			}
 		} else {
 			p.insert_and_split(obj, split);
@@ -667,7 +769,9 @@ private:
 					obj.str().c_str(),
 					page_key.c_str(), p.str().c_str(),
 					rec.split_key.str().c_str(), split.str().c_str());
-			m_t.write(rec.split_key.value, split.save());
+			err = check(m_t.write(rec.split_key.value, split.save()));
+			if (err)
+				return err;
 
 			m_meta.num_pages++;
 			if (p.is_leaf())
@@ -684,7 +788,9 @@ private:
 			old_root_key.value = generate_page_key();
 			old_root_key.id = p.objects.front().id;
 
-			m_t.write(old_root_key.value, p.save());
+			err = check(m_t.write(old_root_key.value, p.save()));
+			if (err)
+				return err;
 
 			// we have written split page and old root page above
 			// now its time to create and write the new root
@@ -694,7 +800,9 @@ private:
 
 			new_root.next = new_root.objects.front().value;
 
-			m_t.write(m_sk, new_root.save());
+			err = check(m_t.write(m_sk, new_root.save()));
+			if (err)
+				return err;
 
 			m_meta.num_pages++;
 
@@ -704,10 +812,10 @@ private:
 					old_root_key.str().c_str(), new_root.str().c_str());
 		} else {
 			dprintf("insert: %s: write main page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
-			m_t.write(page_key, p.save(), true);
+			err = check(m_t.write(page_key, p.save(), true));
 		}
 
-		return;
+		return err;
 	}
 
 	std::string generate_page_key() {
@@ -717,6 +825,22 @@ private:
 		dprintf("generated key: %s\n", buf);
 		m_meta.page_index++;
 		return std::string(buf);
+	}
+
+	int check(const elliptics::sync_write_result &wr) {
+		std::vector<int> groups;
+		for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
+			if (!r->error()) {
+				groups.push_back(r->command()->id.group_id);
+			}
+		}
+
+		m_t.set_groups(groups);
+
+		if (groups.empty())
+			return -EIO;
+
+		return 0;
 	}
 };
 
@@ -868,19 +992,40 @@ public:
 		m_groups = groups;
 	}
 
-	std::string read(const std::string &key) {
+	elliptics::read_result_entry read(const std::string &key) {
 		dprintf("elliptics read: key: %s\n", key.c_str());
-		elliptics::session s = session(true);
-		elliptics::read_result_entry e = s.read_data(key, 0, 0).get_one();
-		dprintf("elliptics read: key: %s, data-size: %zd\n", key.c_str(), e.file().size());
-		return e.file().to_string();
+		elliptics::session s = session(m_groups, true);
+		return s.read_data(key, 0, 0).get_one();
 	}
 
-	void write_prepare_commit(const std::string &key, const char *data, size_t size) {
-		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
-		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data, size);
+	std::vector<elliptics::read_result_entry> read_all(const std::string &key) {
+		std::vector<elliptics::async_read_result> results;
 
-		elliptics::session s = session(false);
+		elliptics::session s = session(m_groups, true);
+		for (auto it = m_groups.begin(); it != m_groups.end(); ++it) {
+			std::vector<int> tmp;
+			tmp.push_back(*it);
+
+			s.set_groups(tmp);
+
+			results.emplace_back(s.read_data(key, 0, 0));
+		}
+
+		std::vector<elliptics::read_result_entry> ret;
+		for (auto it = results.begin(), end = results.end(); it != end; ++it) {
+			ret.push_back(it->get_one());
+		}
+
+		return ret;
+	}
+
+	elliptics::sync_write_result write(const std::vector<int> groups, const std::string &key, const std::string &data, bool cache) {
+		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
+		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
+
+		elliptics::session s = session(groups, cache);
+
+		s.set_filter(elliptics::filters::all);
 
 		elliptics::key id(key);
 		s.transform(id);
@@ -906,21 +1051,11 @@ public:
 
 		ctl.fd = -1;
 
-		elliptics::write_result_entry e = s.write_data(ctl).get_one();
+		return s.write_data(ctl).get();
 	}
 
-	void write(const std::string &key, const char *data, size_t size, bool cache = false) {
-		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
-		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data, size);
-		elliptics::session s = session(cache);
-		elliptics::write_result_entry e = s.write_data(key, dp, 0).get_one();
-	}
-
-	void write(const std::string &key, const std::string &data, bool cache = false) {
-		if (cache)
-			return write(key, data.c_str(), data.size(), cache);
-		else
-			return write_prepare_commit(key, data.c_str(), data.size());
+	elliptics::sync_write_result write(const std::string &key, const std::string &data, bool cache = false) {
+		return write(m_groups, key, data, cache);
 	}
 
 private:
@@ -929,11 +1064,12 @@ private:
 	std::string m_ns;
 	std::vector<int> m_groups;
 
-	elliptics::session session(bool cache) {
+	elliptics::session session(const std::vector<int> groups, bool cache) {
 		elliptics::session s(m_node);
 		s.set_namespace(m_ns);
-		s.set_groups(m_groups);
+		s.set_groups(groups);
 		s.set_timeout(60);
+		s.set_exceptions_policy(elliptics::session::no_exceptions);
 		if (cache)
 			s.set_ioflags(DNET_IO_FLAGS_CACHE);
 
@@ -1036,7 +1172,7 @@ private:
 		size_t page_num = 0;
 		size_t leaf_num = 0;
 		for (auto it = idx.page_begin(), end = idx.page_end(); it != end; ++it) {
-			dprintf("page: %s\n", it->str().c_str());
+			dprintf("page: %s: %s\n", it.path().c_str(), it->str().c_str());
 			page_num++;
 			if (it->is_leaf())
 				leaf_num++;
@@ -1080,7 +1216,7 @@ private:
 		for (int i = 0; i < num_indexes; ++i) {
 			std::string name = "intersection-index.rand." + lexical_cast(i) + "." + lexical_cast(rand());
 
-			indexes.emplace_back(name);
+			indexes.push_back(name);
 			indexes::index<T> idx(t, name);
 
 			for (size_t j = 0; j < different_num; ++j) {
