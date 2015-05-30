@@ -1301,7 +1301,7 @@ int main(int argc, char *argv[])
 		("help", "This help message")
 		;
 
-	std::string ns, sk, log_file, log_level, groups;
+	std::string ns, log_file, log_level, groups;
 	bpo::options_description ell("Elliptics options");
 	ell.add_options()
 		("remote", bpo::value<std::vector<std::string>>(&remotes)->required()->composing(), "remote node: addr:port:family")
@@ -1309,7 +1309,6 @@ int main(int argc, char *argv[])
 		("log-level", bpo::value<std::string>(&log_level)->default_value("error"), "log level: error, info, notice, debug")
 		("groups", bpo::value<std::string>(&groups)->required(), "groups where index tree is stored: 1:2:3")
 		("namespace", bpo::value<std::string>(&ns)->default_value(""), "Namespace where index tree is stored")
-		("start-key", bpo::value<std::string>(&sk)->default_value("start-key"), "Key where root of the index tree is stored")
 		;
 
 	bpo::options_description cmdline_options;
@@ -1335,8 +1334,6 @@ int main(int argc, char *argv[])
 	t.add_remotes(remotes);
 	t.set_namespace(ns);
 	t.set_groups(elliptics::parse_groups(groups.c_str()));
-
-	indexes::index<elliptics_transport> idx(t, sk);
 
 	time_t tm = time(NULL);
 	srand(tm);
