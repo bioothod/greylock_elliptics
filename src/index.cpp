@@ -192,6 +192,19 @@ struct page {
 		return (it - objects.begin()) - 1;
 	}
 
+	// returnes true if modified page is subject to compaction
+	bool remove(size_t remove_pos) {
+		total_size -= objects[remove_pos].size();
+		for (size_t pos = remove_pos + 1, objects_num = objects.size(); pos < objects_num; ++pos) {
+			objects[pos - 1] = objects[pos];
+		}
+
+		objects.resize(objects.size() - 1);
+
+
+		return total_size < max_page_size / 3;
+	}
+
 	bool insert_and_split(const key &obj, page &other) {
 		std::vector<key> copy;
 		bool copied = false;
@@ -428,6 +441,11 @@ struct recursion {
 	key split_key;
 };
 
+struct remove_recursion {
+	key page_start;
+	bool removed = false;
+};
+
 template <typename T>
 class index {
 public:
@@ -546,6 +564,18 @@ public:
 	int insert(const key &obj) {
 		recursion tmp;
 		int ret = insert(m_sk, obj, tmp);
+		if (ret < 0)
+			return ret;
+
+		m_meta.generation_number++;
+		meta_write();
+
+		return 0;
+	}
+
+	int remove(const key &obj) {
+		remove_recursion tmp;
+		int ret = remove(m_sk, obj, tmp);
 		if (ret < 0)
 			return ret;
 
@@ -833,6 +863,86 @@ private:
 		return err;
 	}
 
+	// returns true if page at @page_key has been split after insertion
+	// key used to store split part has been saved into @obj.value
+	int remove(const std::string &page_key, const key &obj, remove_recursion &rec) {
+		elliptics::read_result_entry e = m_t.read(page_key);
+		if (e.error()) {
+			return e.error().code();
+		}
+
+		int err;
+		page p;
+		p.load(e.file().data(), e.file().size());
+
+		dprintf("remove: %s: page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
+
+		int found_pos = p.search_node(obj);
+		if (found_pos < 0) {
+			dprintf("remove: %s: page: %s -> %s, found_pos: %d\n",
+				obj.str().c_str(),
+				page_key.c_str(), p.str().c_str(),
+				found_pos);
+
+			return -ENOENT;
+		}
+
+		key &found = p.objects[found_pos];
+
+		dprintf("remove: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
+			obj.str().c_str(),
+			page_key.c_str(), p.str().c_str(),
+			found_pos, found.str().c_str());
+
+		if (p.is_leaf() || rec.removed) {
+			p.remove(found_pos);
+		} else {
+			err = remove(found.value, obj, rec);
+			if (err < 0)
+				return err;
+
+			// we have removed key from the underlying page, and the first key of that page hasn't been changed
+			if (!rec.page_start)
+				return 0;
+
+			// the first key of the underlying page has been changed, update appropriate key in the current page
+			found.id = rec.page_start.id;
+		}
+
+		dprintf("remove: %s: returned: %s -> %s, found_pos: %d, found_key: %s\n",
+				obj.str().c_str(),
+				page_key.c_str(), p.str().c_str(),
+				found_pos, found.str().c_str());
+
+		rec.page_start.id.clear();
+		rec.removed = false;
+
+		if (p.objects.size() != 0) {
+			// we have to update higher level page if start of the current page has been changed
+			// we can not use @found here, since it could be removed from the current page
+			if (found_pos == 0) {
+				rec.page_start.id = p.objects.front().id;
+			}
+
+			err = check(m_t.write(page_key, p.save()));
+			if (err)
+				return err;
+		} else {
+			// if current page is empty, we have to remove appropriate link from the higher page
+			rec.removed = true;
+
+			err = check(m_t.remove(page_key));
+			if (err)
+				return err;
+
+			m_meta.num_pages--;
+			if (p.is_leaf())
+				m_meta.num_leaf_pages--;
+		}
+
+		return 0;
+	}
+
 	std::string generate_page_key() {
 		char buf[128 + m_sk.size()];
 
@@ -842,7 +952,8 @@ private:
 		return std::string(buf);
 	}
 
-	int check(const elliptics::sync_write_result &wr) {
+	template <typename EllipticsResult>
+	int check(const EllipticsResult &wr) {
 		std::vector<int> groups;
 		for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
 			if (!r->error()) {
@@ -1077,6 +1188,10 @@ public:
 		return write(m_groups, key, data, cache);
 	}
 
+	elliptics::sync_remove_result remove(const std::string &key) {
+		return session(m_groups, false).remove(key).get();
+	}
+
 private:
 	elliptics::file_logger m_log;
 	elliptics::node m_node;
@@ -1105,6 +1220,8 @@ public:
 	test(T &t) {
 		std::string idx_name0 = "test" + lexical_cast(rand());
 		indexes::index<T> idx(t, idx_name0);
+
+		test::run(this, func(&test::test_remove_some_keys, idx, 10000));
 
 		std::vector<indexes::key> keys;
 		if (t.get_groups().size() > 1)
@@ -1145,6 +1262,50 @@ private:
 			idx.insert(k);
 			keys.push_back(k);
 			dprintf("inserted: %s\n\n", k.str().c_str());
+		}
+	}
+
+	void test_remove_some_keys(indexes::index<T> &idx, int max) {
+		std::vector<indexes::key> keys;
+
+		for (int i = 0; i < max; ++i) {
+			indexes::key k;
+
+			char buf[128];
+
+			snprintf(buf, sizeof(buf), "%08x.remove-test.%08d", rand(), i);
+			k.id = std::string(buf);
+
+			snprintf(buf, sizeof(buf), "value.%08d", i);
+			k.value = std::string(buf);
+
+			idx.insert(k);
+			keys.push_back(k);
+		}
+
+		ribosome::timer tm;
+		printf("remove-test: meta before remove: %s\n", idx.meta().str().c_str());
+		for (auto it = keys.begin(), end = keys.begin() + keys.size() / 2; it != end; ++it) {
+			idx.remove(*it);
+		}
+		printf("remove-test: meta after remove: %s, removed entries: %zd, time: %ld ms\n",
+				idx.meta().str().c_str(), keys.size() / 2, tm.elapsed());
+
+		for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
+			indexes::key found = idx.search(*it);
+			if (it < keys.begin() + keys.size() / 2) {
+				if (found) {
+					std::ostringstream ss;
+					ss << "key: " << it->str() << " has been found, but it was removed";
+					throw std::runtime_error(ss.str());
+				}
+			} else {
+				if (!found) {
+					std::ostringstream ss;
+					ss << "key: " << it->str() << " has not been found, but it was not removed";
+					throw std::runtime_error(ss.str());
+				}
+			}
 		}
 	}
 
