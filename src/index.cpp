@@ -1,8 +1,4 @@
 #include <iostream>
-#include <string>
-#include <vector>
-
-#include <stdint.h>
 
 #include "indexes/elliptics.hpp"
 #include "indexes/intersection.hpp"
@@ -87,7 +83,8 @@ private:
 			char buf[128];
 
 			snprintf(buf, sizeof(buf), "%08x.remove-test.%08d", rand(), i);
-			k.id = std::string(buf);
+			k.
+				id = std::string(buf);
 
 			snprintf(buf, sizeof(buf), "some-data.%08d", i);
 			k.url.key = std::string(buf);
