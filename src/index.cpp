@@ -42,13 +42,47 @@ static size_t max_page_size = 4096;
 #define dprintf(fmt, a...) do {} while (0)
 //#define dprintf(fmt, a...) printf(fmt, ##a)
 
+struct eurl {
+	std::string bucket;
+	std::string key;
+
+	MSGPACK_DEFINE(bucket, key);
+
+
+	size_t size() const {
+		return bucket.size() + key.size();
+	}
+
+	std::string str() const {
+		return bucket + "/" + key;
+	}
+
+	bool operator!=(const eurl &other) const {
+		return bucket != other.bucket || key != other.key;
+	}
+
+	bool operator==(const eurl &other) const {
+		return bucket == other.bucket && key == other.key;
+	}
+
+	bool operator<(const eurl &other) const {
+		return bucket < other.bucket || key < other.key;
+	}
+	bool operator<=(const eurl &other) const {
+		return bucket <= other.bucket || key <= other.key;
+	}
+
+	bool empty() const {
+		return key.empty();
+	}
+};
 
 struct key {
 	std::string id;
-	std::string value;
+	eurl url;
 
 	size_t size() const {
-		return id.size() + value.size();
+		return id.size() + url.size();
 	}
 
 	bool operator<(const key &other) const {
@@ -72,10 +106,10 @@ struct key {
 	}
 
 	std::string str() const {
-		return id + ":" + value;
+		return id + ":" + url.str();
 	}
 
-	MSGPACK_DEFINE(id, value);
+	MSGPACK_DEFINE(id, url);
 };
 
 #define PAGE_LEAF		(1<<0)
@@ -84,7 +118,7 @@ struct page {
 	uint32_t flags = 0;
 	std::vector<key> objects;
 	size_t total_size = 0;
-	std::string next;
+	eurl next;
 
 	MSGPACK_DEFINE(flags, objects, total_size, next);
 
@@ -131,7 +165,7 @@ struct page {
 	void load(const void *data, size_t size) {
 		objects.clear();
 		flags = 0;
-		next.clear();
+		next = eurl();
 		total_size = 0;
 
 		msgpack::unpacked result;
@@ -275,8 +309,8 @@ public:
 	typedef std::ptrdiff_t difference_type;
 
 	page_iterator(T &t, const page &p) : m_t(t), m_page(p) {}
-	page_iterator(T &t, const std::string &path) : m_t(t), m_path(path) {
-		elliptics::read_result_entry e = m_t.read(path);
+	page_iterator(T &t, const eurl &url) : m_t(t), m_url(url) {
+		elliptics::read_result_entry e = m_t.read(url);
 		if (e.error())
 			return;
 
@@ -313,25 +347,25 @@ public:
 		return m_page != rhs.m_page;
 	}
 
-	std::string path() const {
-		return m_path;
+	eurl url() const {
+		return m_url;
 	}
 
 private:
 	T &m_t;
 	page m_page;
 	size_t m_page_index = 0;
-	std::string m_path;
+	eurl m_url;
 
 	void try_loading_next_page() {
 		++m_page_index;
 
 		if (m_page.next.empty()) {
 			m_page = page();
-			m_path = "";
+			m_url = eurl();
 		} else {
-			m_path = m_page.next;
-			elliptics::read_result_entry e = m_t.read(m_path);
+			m_url = m_page.next;
+			elliptics::read_result_entry e = m_t.read(m_url);
 			if (e.error()) {
 				m_page = page();
 				return;
@@ -449,7 +483,7 @@ struct remove_recursion {
 template <typename T>
 class index {
 public:
-	index(T &t, const std::string &sk): m_t(t), m_sk(sk) {
+	index(T &t, const eurl &sk): m_t(t), m_sk(sk) {
 		std::vector<elliptics::read_result_entry> meta = m_t.read_all(meta_key());
 
 		struct separate_index_meta {
@@ -520,9 +554,9 @@ public:
 
 		size_t pages_recovered = 0;
 		for (auto it = page_begin(), end = page_end(); it != end; ++it) {
-			dprintf("page: %s: %s -> %s\n", it.path().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
+			dprintf("page: %s: %s -> %s\n", it.url().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
 
-			elliptics::sync_write_result wr = m_t.write(recovery_groups, it.path(), it->save(), false);
+			elliptics::sync_write_result wr = m_t.write(recovery_groups, it.url(), it->save(), false);
 			
 			recovery_groups.clear();
 			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
@@ -645,12 +679,15 @@ public:
 
 private:
 	T &m_t;
-	std::string m_sk;
+	eurl m_sk;
 
 	index_meta m_meta;
 
-	std::string meta_key() const {
-		return m_sk + ".meta";
+	eurl meta_key() const {
+		eurl ret;
+		ret.bucket = m_sk.bucket;
+		ret.key = m_sk.key + ".meta";
+		return ret;
 	}
 
 	void meta_write() {
@@ -666,7 +703,7 @@ private:
 		m_meta.num_pages++;
 	}
 
-	std::pair<page, int> search(const std::string &page_key, const key &obj) const {
+	std::pair<page, int> search(const eurl &page_key, const key &obj) const {
 		elliptics::read_result_entry e = m_t.read(page_key);
 		if (e.error()) {
 			return std::make_pair(page(), e.error().code());
@@ -679,7 +716,7 @@ private:
 		if (found_pos < 0) {
 			dprintf("search: %s: page: %s -> %s, found_pos: %d\n",
 				obj.str().c_str(),
-				page_key.c_str(), p.str().c_str(),
+				page_key.str().c_str(), p.str().c_str(),
 				found_pos);
 
 			return std::make_pair(p, found_pos);
@@ -687,18 +724,18 @@ private:
 
 		dprintf("search: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
 			obj.str().c_str(),
-			page_key.c_str(), p.str().c_str(),
+			page_key.str().c_str(), p.str().c_str(),
 			found_pos, p.objects[found_pos].str().c_str());
 
 		if (p.is_leaf())
 			return std::make_pair(p, found_pos);
 
-		return search(p.objects[found_pos].value, obj);
+		return search(p.objects[found_pos].url, obj);
 	}
 
 	// returns true if page at @page_key has been split after insertion
-	// key used to store split part has been saved into @obj.value
-	int insert(const std::string &page_key, const key &obj, recursion &rec) {
+	// key used to store split part has been saved into @obj.url
+	int insert(const eurl &page_key, const key &obj, recursion &rec) {
 		elliptics::read_result_entry e = m_t.read(page_key);
 		if (e.error()) {
 			return e.error().code();
@@ -710,14 +747,14 @@ private:
 
 		page split;
 
-		dprintf("insert: %s: page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
+		dprintf("insert: %s: page: %s -> %s\n", obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
 
 		if (!p.is_leaf()) {
 			int found_pos = p.search_node(obj);
 			if (found_pos < 0) {
 				dprintf("insert: %s: page: %s -> %s, found_pos: %d\n",
 					obj.str().c_str(),
-					page_key.c_str(), p.str().c_str(),
+					page_key.str().c_str(), p.str().c_str(),
 					found_pos);
 
 				// this is not a leaf node, but there is no leaf in @objects
@@ -727,25 +764,25 @@ private:
 				// this path can only be taken once - when new empty index has been created
 				key leaf_key;
 				leaf_key.id = obj.id;
-				leaf_key.value = generate_page_key();
+				leaf_key.url = generate_page_url();
 
 				page leaf(true), unused_split;
 				leaf.insert_and_split(obj, unused_split);
-				err = check(m_t.write(leaf_key.value, leaf.save()));
+				err = check(m_t.write(leaf_key.url, leaf.save()));
 				if (err)
 					return err;
 
 				// no need to perform recursion unwind, since there were no entry for this new leaf
 				// which can only happen when page was originally empty
 				p.insert_and_split(leaf_key, unused_split);
-				p.next = leaf_key.value;
+				p.next = leaf_key.url;
 				err = check(m_t.write(page_key, p.save()));
 				if (err)
 					return err;
 
 				dprintf("insert: %s: page: %s -> %s, leaf: %s -> %s\n",
 						obj.str().c_str(),
-						page_key.c_str(), p.str().c_str(),
+						page_key.str().c_str(), p.str().c_str(),
 						leaf_key.str().c_str(), leaf.str().c_str());
 
 				m_meta.num_pages++;
@@ -757,14 +794,14 @@ private:
 
 			dprintf("insert: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
 				obj.str().c_str(),
-				page_key.c_str(), p.str().c_str(),
+				page_key.str().c_str(), p.str().c_str(),
 				found_pos, found.str().c_str());
 
-			insert(found.value, obj, rec);
+			insert(found.url, obj, rec);
 
 			dprintf("insert: %s: returned: %s -> %s, found_pos: %d, found_key: %s, rec: page_start: %s, split_key: %s\n",
 					obj.str().c_str(),
-					page_key.c_str(), p.str().c_str(),
+					page_key.str().c_str(), p.str().c_str(),
 					found_pos, found.str().c_str(),
 					rec.page_start.str().c_str(),
 					rec.split_key.str().c_str());
@@ -804,17 +841,17 @@ private:
 
 		if (!split.is_empty()) {
 			// generate key for split page
-			rec.split_key.value = generate_page_key();
+			rec.split_key.url = generate_page_url();
 			rec.split_key.id = split.objects.front().id;
 
 			split.next = p.next;
-			p.next = rec.split_key.value;
+			p.next = rec.split_key.url;
 
 			dprintf("insert: %s: write split page: %s -> %s, split: key: %s -> %s\n",
 					obj.str().c_str(),
-					page_key.c_str(), p.str().c_str(),
+					page_key.str().c_str(), p.str().c_str(),
 					rec.split_key.str().c_str(), split.str().c_str());
-			err = check(m_t.write(rec.split_key.value, split.save()));
+			err = check(m_t.write(rec.split_key.url, split.save()));
 			if (err)
 				return err;
 
@@ -830,10 +867,10 @@ private:
 			// split and old root
 
 			key old_root_key;
-			old_root_key.value = generate_page_key();
+			old_root_key.url = generate_page_url();
 			old_root_key.id = p.objects.front().id;
 
-			err = check(m_t.write(old_root_key.value, p.save()));
+			err = check(m_t.write(old_root_key.url, p.save()));
 			if (err)
 				return err;
 
@@ -843,7 +880,7 @@ private:
 			new_root.insert_and_split(old_root_key, unused_split);
 			new_root.insert_and_split(rec.split_key, unused_split);
 
-			new_root.next = new_root.objects.front().value;
+			new_root.next = new_root.objects.front().url;
 
 			err = check(m_t.write(m_sk, new_root.save()));
 			if (err)
@@ -853,10 +890,10 @@ private:
 
 			dprintf("insert: %s: write split page: %s -> %s, old_root_key: %s, new_root: %s\n",
 					obj.str().c_str(),
-					page_key.c_str(), p.str().c_str(),
+					page_key.str().c_str(), p.str().c_str(),
 					old_root_key.str().c_str(), new_root.str().c_str());
 		} else {
-			dprintf("insert: %s: write main page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
+			dprintf("insert: %s: write main page: %s -> %s\n", obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
 			err = check(m_t.write(page_key, p.save(), true));
 		}
 
@@ -864,8 +901,8 @@ private:
 	}
 
 	// returns true if page at @page_key has been split after insertion
-	// key used to store split part has been saved into @obj.value
-	int remove(const std::string &page_key, const key &obj, remove_recursion &rec) {
+	// key used to store split part has been saved into @obj.url
+	int remove(const eurl &page_key, const key &obj, remove_recursion &rec) {
 		elliptics::read_result_entry e = m_t.read(page_key);
 		if (e.error()) {
 			return e.error().code();
@@ -875,13 +912,13 @@ private:
 		page p;
 		p.load(e.file().data(), e.file().size());
 
-		dprintf("remove: %s: page: %s -> %s\n", obj.str().c_str(), page_key.c_str(), p.str().c_str());
+		dprintf("remove: %s: page: %s -> %s\n", obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
 
 		int found_pos = p.search_node(obj);
 		if (found_pos < 0) {
 			dprintf("remove: %s: page: %s -> %s, found_pos: %d\n",
 				obj.str().c_str(),
-				page_key.c_str(), p.str().c_str(),
+				page_key.str().c_str(), p.str().c_str(),
 				found_pos);
 
 			return -ENOENT;
@@ -891,13 +928,13 @@ private:
 
 		dprintf("remove: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
 			obj.str().c_str(),
-			page_key.c_str(), p.str().c_str(),
+			page_key.str().c_str(), p.str().c_str(),
 			found_pos, found.str().c_str());
 
 		if (p.is_leaf() || rec.removed) {
 			p.remove(found_pos);
 		} else {
-			err = remove(found.value, obj, rec);
+			err = remove(found.url, obj, rec);
 			if (err < 0)
 				return err;
 
@@ -911,7 +948,7 @@ private:
 
 		dprintf("remove: %s: returned: %s -> %s, found_pos: %d, found_key: %s\n",
 				obj.str().c_str(),
-				page_key.c_str(), p.str().c_str(),
+				page_key.str().c_str(), p.str().c_str(),
 				found_pos, found.str().c_str());
 
 		rec.page_start.id.clear();
@@ -943,13 +980,13 @@ private:
 		return 0;
 	}
 
-	std::string generate_page_key() {
-		char buf[128 + m_sk.size()];
-
-		snprintf(buf, sizeof(buf), "%s.%llu", m_sk.c_str(), (unsigned long long)m_meta.page_index);
-		dprintf("generated key: %s\n", buf);
+	eurl generate_page_url() {
+		eurl ret;
+		ret.bucket = m_sk.bucket;
+		ret.key = m_sk.key + "." + lexical_cast(m_meta.page_index);
+		dprintf("generated key: %s\n", ret.str().c_str());
 		m_meta.page_index++;
-		return std::string(buf);
+		return ret;
 	}
 
 	template <typename EllipticsResult>
@@ -973,14 +1010,17 @@ private:
 namespace intersect {
 struct result {
 	bool completed = false;
-	std::map<std::string, std::vector<key>> keys;
+
+	// index name (eurl) -> set of keys from that index which match other indexes
+	// key IDs will be the same, but key data (url) can be different
+	std::map<eurl, std::vector<key>> keys;
 };
 
 template <typename T>
 class intersector {
 public:
 	intersector(T &t) : m_t(t) {}
-	result intersect(const std::vector<std::string> &indexes) const {
+	result intersect(const std::vector<eurl> &indexes) const {
 		std::string start = std::string("\0");
 		return intersect(indexes, start, INT_MAX);
 	}
@@ -996,17 +1036,17 @@ public:
 	// after call to this function returns, then intersection is completed.
 	//
 	// @result.completed will be set to true in this case.
-	result intersect(const std::vector<std::string> &indexes, std::string &start, size_t num) const {
+	result intersect(const std::vector<eurl> &indexes, std::string &start, size_t num) const {
 		struct iter {
 			index<T> idx;
 			indexes::iterator<T> begin, end;
 
-			iter(T &t, const std::string &name, const std::string &start) :
+			iter(T &t, const eurl &name, const std::string &start) :
 				idx(t, name), begin(idx.begin(start)), end(idx.end()) {}
 		};
 		std::vector<iter> idata;
 
-		for_each(indexes.begin(), indexes.end(), [&] (const std::string &name) {
+		for_each(indexes.begin(), indexes.end(), [&] (const eurl &name) {
 				iter it(m_t, name, start);
 
 				idata.emplace_back(it);
@@ -1061,22 +1101,19 @@ public:
 			}
 
 			start = idata[pos[0]].begin->id;
-			if (res.keys.size() == num) {
+			if (res.keys.begin()->second.size() == num) {
 				break;
 			}
 
-			auto find_it = res.keys.find(start);
-
 			for (auto it = pos.begin(); it != pos.end(); ++it) {
 				auto &min_it = idata[*it].begin;
-
 				key k = *min_it;
-				k.id = indexes[*it];
 
+				auto find_it = res.keys.find(indexes[*it]);
 				if (find_it == res.keys.end()) {
 					std::vector<key> kk;
 					kk.emplace_back(k);
-					auto pair = res.keys.insert(std::make_pair(start, kk));
+					auto pair = res.keys.insert(std::make_pair(indexes[*it], kk));
 					find_it = pair.first;
 				} else {
 					find_it->second.emplace_back(k);
@@ -1122,23 +1159,25 @@ public:
 		return m_groups;
 	}
 
-	elliptics::read_result_entry read(const std::string &key) {
+	elliptics::read_result_entry read(const indexes::eurl &key) {
 		dprintf("elliptics read: key: %s\n", key.c_str());
 		elliptics::session s = session(m_groups, true);
-		return s.read_data(key, 0, 0).get_one();
+		s.set_namespace(key.bucket);
+		return s.read_data(key.key, 0, 0).get_one();
 	}
 
-	std::vector<elliptics::read_result_entry> read_all(const std::string &key) {
+	std::vector<elliptics::read_result_entry> read_all(const indexes::eurl &key) {
 		std::vector<elliptics::async_read_result> results;
 
 		elliptics::session s = session(m_groups, true);
+		s.set_namespace(key.bucket);
 		for (auto it = m_groups.begin(); it != m_groups.end(); ++it) {
 			std::vector<int> tmp;
 			tmp.push_back(*it);
 
 			s.set_groups(tmp);
 
-			results.emplace_back(s.read_data(key, 0, 0));
+			results.emplace_back(s.read_data(key.key, 0, 0));
 		}
 
 		std::vector<elliptics::read_result_entry> ret;
@@ -1149,15 +1188,16 @@ public:
 		return ret;
 	}
 
-	elliptics::sync_write_result write(const std::vector<int> groups, const std::string &key, const std::string &data, bool cache) {
+	elliptics::sync_write_result write(const std::vector<int> groups, const indexes::eurl &key, const std::string &data, bool cache) {
 		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
 		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
 
 		elliptics::session s = session(groups, cache);
+		s.set_namespace(key.bucket);
 
 		s.set_filter(elliptics::filters::all);
 
-		elliptics::key id(key);
+		elliptics::key id(key.key);
 		s.transform(id);
 
 		dnet_io_control ctl;
@@ -1184,12 +1224,14 @@ public:
 		return s.write_data(ctl).get();
 	}
 
-	elliptics::sync_write_result write(const std::string &key, const std::string &data, bool cache = false) {
+	elliptics::sync_write_result write(const indexes::eurl &key, const std::string &data, bool cache = false) {
 		return write(m_groups, key, data, cache);
 	}
 
-	elliptics::sync_remove_result remove(const std::string &key) {
-		return session(m_groups, false).remove(key).get();
+	elliptics::sync_remove_result remove(const indexes::eurl &key) {
+		elliptics::session s = session(m_groups, false);
+		s.set_namespace(key.bucket);
+		return s.remove(key.key).get();
 	}
 
 private:
@@ -1218,10 +1260,16 @@ class test {
 #define func(name, args...) __stringify(name), name, ##args
 public:
 	test(T &t) {
-		std::string idx_name0 = "test" + lexical_cast(rand());
-		indexes::index<T> idx(t, idx_name0);
+		test::run(this, func(&test::test_intersection, t, 3, 5000, 10000));
+		return;
 
-		test::run(this, func(&test::test_remove_some_keys, idx, 10000));
+		indexes::eurl start;
+		start.key = "test" + lexical_cast(rand());
+		start.bucket = m_bucket;
+
+		indexes::index<T> idx(t, start);
+
+		test::run(this, func(&test::test_remove_some_keys, t, 10000));
 
 		std::vector<indexes::key> keys;
 		if (t.get_groups().size() > 1)
@@ -1234,6 +1282,8 @@ public:
 	}
 
 private:
+	std::string m_bucket = "";
+
 	template <typename Class, typename Method, typename... Args>
 	static inline void run(Class *obj, const char *str, Method method, Args &&...args) {
 		try {
@@ -1255,8 +1305,9 @@ private:
 			snprintf(buf, sizeof(buf), "%08x.%08d", rand(), i);
 			k.id = std::string(buf);
 
-			snprintf(buf, sizeof(buf), "value.%08d", i);
-			k.value = std::string(buf);
+			snprintf(buf, sizeof(buf), "some-data.%08d", i);
+			k.url.key = std::string(buf);
+			k.url.bucket = m_bucket;
 
 			dprintf("inserting: %s\n", k.str().c_str());
 			idx.insert(k);
@@ -1265,7 +1316,12 @@ private:
 		}
 	}
 
-	void test_remove_some_keys(indexes::index<T> &idx, int max) {
+	void test_remove_some_keys(T &t, int max) {
+		indexes::eurl start;
+		start.key = "remove-test-index." + lexical_cast(rand());
+		start.bucket = m_bucket;
+
+		indexes::index<T> idx(t, start);
 		std::vector<indexes::key> keys;
 
 		for (int i = 0; i < max; ++i) {
@@ -1276,8 +1332,9 @@ private:
 			snprintf(buf, sizeof(buf), "%08x.remove-test.%08d", rand(), i);
 			k.id = std::string(buf);
 
-			snprintf(buf, sizeof(buf), "value.%08d", i);
-			k.value = std::string(buf);
+			snprintf(buf, sizeof(buf), "some-data.%08d", i);
+			k.url.key = std::string(buf);
+			k.url.bucket = m_bucket;
 
 			idx.insert(k);
 			keys.push_back(k);
@@ -1312,7 +1369,10 @@ private:
 	void test_index_recovery(T &t, int max) {
 		std::vector<int> groups = t.get_groups();
 
-		std::string name = "recovery-test." + lexical_cast(rand());
+		indexes::eurl name;
+		name.key = "recovery-test." + lexical_cast(rand());
+		name.bucket = m_bucket;
+
 		indexes::index<T> idx(t, name);
 
 		std::vector<indexes::key> keys;
@@ -1320,7 +1380,8 @@ private:
 		for (int i = 0; i < max; ++i) {
 			indexes::key k;
 			k.id = lexical_cast(rand()) + ".recovery-key." + lexical_cast(i);
-			k.value = "recovery-value." + lexical_cast(i);
+			k.url.key = "recovery-value." + lexical_cast(i);
+			k.url.bucket = m_bucket;
 
 			int err = idx.insert(k);
 			if (!err) {
@@ -1366,13 +1427,13 @@ private:
 				throw std::runtime_error(ss.str());
 			}
 
-			if (found.value != it->value) {
+			if (found.url != it->url) {
 				std::ostringstream ss;
-				ss << "search failed: value mismatch: found: " << found << ", must be: " << *it;
+				ss << "search failed: url/value mismatch: found: " << found << ", must be: " << *it;
 				throw std::runtime_error(ss.str());
 			}
 
-			dprintf("search: key: %s, value: %s\n", found.id.c_str(), found.value.c_str());
+			dprintf("search: key: %s, url/value: %s\n", found.id.c_str(), found.url.str().c_str());
 		}
 
 		t.set_groups(groups);
@@ -1395,13 +1456,13 @@ private:
 				ss << "search failed: ID mismatch: found: " << found << ", must be: " << *it;
 				throw std::runtime_error(ss.str());
 			}
-			if (found.value != it->value) {
+			if (found.url != it->url) {
 				std::ostringstream ss;
-				ss << "search failed: value mismatch: found: " << found << ", must be: " << *it;
+				ss << "search failed: url/value mismatch: found: " << found << ", must be: " << *it;
 				throw std::runtime_error(ss.str());
 			}
 
-			dprintf("search: key: %s, value: %s\n\n", found.id.c_str(), found.value.c_str());
+			dprintf("search: key: %s, url/value: %s\n\n", found.id.c_str(), found.value.str().c_str());
 		}
 	}
 
@@ -1414,7 +1475,7 @@ private:
 
 		if (num != keys.size()) {
 			std::ostringstream ss;
-			ss << "iterated numbed mismatch: keys: " << keys.size() << ", iterated: " << num;
+			ss << "iterated number mismatch: keys: " << keys.size() << ", iterated: " << num;
 			throw std::runtime_error(ss.str());
 		}
 	}
@@ -1453,28 +1514,32 @@ private:
 	}
 
 	void test_intersection(T &t, int num_indexes, size_t same_num, size_t different_num) {
-		std::vector<std::string> indexes;
+		std::vector<indexes::eurl> indexes;
 		std::vector<indexes::key> same;
 
 		for (size_t i = 0; i < same_num; ++i) {
 			indexes::key k;
 			k.id = lexical_cast(rand()) + ".url-same-key." + lexical_cast(i);
-			k.value = "url-same-value." + lexical_cast(i);
+			k.url.key = "url-same-data." + lexical_cast(i);
+			k.url.bucket = m_bucket;
 
 			same.emplace_back(k);
 		}
 
 		for (int i = 0; i < num_indexes; ++i) {
-			std::string name = "intersection-index.rand." + lexical_cast(i) + "." + lexical_cast(rand());
+			indexes::eurl url;
+			url.bucket = m_bucket;
+			url.key = "intersection-index.rand." + lexical_cast(i) + "." + lexical_cast(rand());
+			indexes.push_back(url);
 
-			indexes.push_back(name);
-			indexes::index<T> idx(t, name);
+			indexes::index<T> idx(t, url);
 
 			for (size_t j = 0; j < different_num; ++j) {
 				indexes::key k;
 
 				k.id = lexical_cast(rand()) + ".url-random-key." + lexical_cast(i);
-				k.value = "url-random-value." + lexical_cast(i);
+				k.url.key = "url-random-data." + lexical_cast(i);
+				k.url.bucket = m_bucket;
 
 				idx.insert(k);
 			}
@@ -1484,11 +1549,53 @@ private:
 			}
 		}
 
+		struct index_checker {
+			index_checker(const indexes::intersect::result &res, size_t same_num) {
+				size_t size = 0;
+				for (auto it = res.keys.begin(), end = res.keys.end(); it != end; ++it) {
+					if (!size) {
+						size = it->second.size();
+						continue;
+					}
+
+					if (size != it->second.size() || size != same_num) {
+						std::ostringstream ss;
+						ss << "intersection failed: indexes: " << res.keys.size() <<
+							", same keys in each index: " << same_num <<
+							", current-index: " << it->first.str() <<
+							", found keys (must be equal to the same jeys in each index): " << it->second.size();
+						throw std::runtime_error(ss.str());
+					}
+				}
+
+				for (size_t i = 0; i < size; ++i) {
+					indexes::key k;
+					for (auto it = res.keys.begin(), end = res.keys.end(); it != end; ++it) {
+						if (!k) {
+							k = it->second[i];
+							continue;
+						}
+
+						if (k != it->second[i]) {
+							std::ostringstream ss;
+							ss << "intersection failed: indexes: " << res.keys.size() <<
+								", same keys in each index: " << same_num <<
+								", current-index: " << it->first.str() <<
+								", mismatch position: " << i <<
+								", found key: " << it->second[i].str() <<
+								", must be: " << k.str();
+							throw std::runtime_error(ss.str());
+						}
+					}
+				}
+			}
+		};
+
 		ribosome::timer tm;
 		indexes::intersect::intersector<T> inter(t);
 		indexes::intersect::result res = inter.intersect(indexes);
 		for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
-			dprintf("index: %s\n", it->first.c_str());
+			printf("index: %s, keys: %zd\n", it->first.str().c_str(), it->second.size());
 			for (auto k = it->second.begin(); k != it->second.end(); ++k) {
 				dprintf("  %s\n", k->str().c_str());
 			}
@@ -1496,13 +1603,8 @@ private:
 
 		printf("intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
 				num_indexes, res.keys.size(), same_num, same_num + different_num, tm.restart());
-		if (res.keys.size() != same_num) {
-			std::ostringstream ss;
-			ss << "intersection failed: indexes: " << num_indexes << ", same keys in each index: " << same_num <<
-				", found keys: " << res.keys.size() <<
-				", total keys in each index: " << different_num + same_num;
-			throw std::runtime_error(ss.str());
-		}
+
+		index_checker c(res, same_num);
 
 		indexes::intersect::intersector<T> p(t);
 		std::string start("\0");
@@ -1512,16 +1614,22 @@ private:
 		while (true) {
 			indexes::intersect::result res = p.intersect(indexes, start, num);
 
-			num_found += res.keys.size();
+			if (!res.keys.size())
+				break;
+
+			size_t cur_size = res.keys.begin()->second.size();
+			num_found += cur_size;
 
 			for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
-				dprintf("index: %s, keys: %zd, total keys found: %zd\n", it->first.c_str(), res.keys.size(), num_found);
+				printf("index: %s, keys: %zd, total keys found: %zd\n", it->first.str().c_str(), cur_size, num_found);
 				for (auto k = it->second.begin(); k != it->second.end(); ++k) {
 					dprintf("  %s\n", k->str().c_str());
 				}
 			}
 
-			if (res.keys.size() < num)
+			index_checker c(res, cur_size);
+
+			if (cur_size < num)
 				break;
 
 			if (res.completed)
