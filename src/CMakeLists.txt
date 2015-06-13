@@ -5,3 +5,13 @@ target_link_libraries(indexes_test
 	${MSGPACK_LIBRARIES}
 	${RIBOSOME_LIBRARIES}
 )
+
+add_executable(indexes_server server.cpp)
+target_link_libraries(indexes_server
+	${Boost_LIBRARIES}
+	${ELLIPTICS_LIBRARIES}
+	${MSGPACK_LIBRARIES}
+	${RIBOSOME_LIBRARIES}
+	${THEVOID_LIBRARIES}
+	${SWARM_LIBRARIES}
+)

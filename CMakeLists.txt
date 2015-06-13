@@ -23,6 +23,8 @@ message("Ribosome headers: ${RIBOSOME_INCLUDE_DIRS}")
 INCLUDE(cmake/locate_library.cmake)
 
 LOCATE_LIBRARY(MSGPACK "msgpack.hpp" "msgpack")
+LOCATE_LIBRARY(THEVOID "thevoid/server.hpp" "thevoid")
+LOCATE_LIBRARY(SWARM "swarm/http_request.hpp" "swarm")
 
 FILE(GLOB headers
 	"${CMAKE_CURRENT_SOURCE_DIR}/include/indexes/*.hpp"
@@ -35,6 +37,8 @@ include_directories(${PROJECT_SOURCE_DIR}/include
 	${MSGPACK_INCLUDE_DIRS}
 	${ELLIPTICS_INCLUDE_DIRS}
 	${RIBOSOME_INCLUDE_DIRS}
+	${THEVOID_INCLUDE_DIRS}
+	${SWARM_INCLUDE_DIRS}
 )
 
 link_directories(
@@ -42,6 +46,8 @@ link_directories(
 	${MSGPACK_LIBRARY_DIRS}
 	${ELLIPTICS_LIBRARY_DIRS}
 	${RIBOSOME_LIBRARY_DIRS}
+	${THEVOID_LIBRARY_DIRS}
+	${SWARM_LIBRARY_DIRS}
 )
 
 add_subdirectory(src)

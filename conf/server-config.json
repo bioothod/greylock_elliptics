@@ -1,0 +1,52 @@
+{
+    "endpoints": [
+        "0.0.0.0:8080"
+    ],
+    "backlog": 512,
+    "threads": 2,
+    "buffer_size": 65536,
+	"logger": {
+        "level": "notice",
+        "frontends": [
+            {
+                "formatter": {
+                    "type": "string",
+                    "pattern": "%(timestamp)s %(request_id)s/%(lwp)s/%(pid)s %(severity)s: %(message)s, %(...L)s"
+                },
+                "sink": {
+                    "type": "files",
+                    "path": "/dev/stdout",
+                    "autoflush": true,
+                    "rotation": { "move": 0 }
+                }
+            }
+        ]
+    },
+    "daemon": {
+        "fork": false,
+        "uid": 1000
+    },
+    "monitor-port": 20000,
+    "request_header": "X-Request",
+    "trace_header": "X-Trace",
+    "application": {
+	"remotes": [
+	    "m1.storage.coub.com:1025:2",
+	    "m2.storage.coub.com:1025:2",
+	    "m3.storage.coub.com:1025:2",
+	    "m4.storage.coub.com:1025:2"
+	],
+	"metadata-groups": [
+	    12,21
+	],
+	"buckets": [
+	    "b1",
+	    "b2",
+	    "b77",
+	    "b89",
+	    "bucket:12.21",
+	    "bucket:22.31",
+	    "bucket:32.11"
+	]
+    }
+}
