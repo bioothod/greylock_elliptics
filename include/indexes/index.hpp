@@ -133,7 +133,7 @@ public:
 
 		meta_write();
 		printf("index: opened: page_index: %ld, groups: %s, pages recovered: %zd\n",
-				m_meta.page_index, print_groups(m_t.get_groups()).c_str(), pages_recovered);
+				m_meta.page_index, print_groups(good_groups).c_str(), pages_recovered);
 	}
 
 	~index() {
