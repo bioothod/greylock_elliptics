@@ -13,6 +13,8 @@ struct status {
 
 	elliptics::data_pointer		data;			// associated data
 
+	status() {}
+
 	status(const elliptics::callback_result_entry &ent) {
 		if (!ent.is_valid()) {
 			error = -EINVAL;
