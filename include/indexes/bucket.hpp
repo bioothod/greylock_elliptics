@@ -1,6 +1,8 @@
 #ifndef __INDEXES_BUCKET_HPP
 #define __INDEXES_BUCKET_HPP
 
+#include "indexes/error.hpp"
+
 #include <elliptics/session.hpp>
 
 #include <msgpack.hpp>
@@ -116,12 +118,19 @@ public:
 		return m_valid;
 	}
 
-	elliptics::read_result_entry read(const std::string &key) {
+	status read(const std::string &key) {
+		if (!m_valid) {
+			return invalid_status();
+		}
+
 		elliptics::session s = session(true);
 		return s.read_data(key, 0, 0).get_one();
 	}
 
-	std::vector<elliptics::read_result_entry> read_all(const std::string &key) {
+	std::vector<status> read_all(const std::string &key) {
+		if (!m_valid) {
+			return std::vector<status>();
+		}
 		std::vector<elliptics::async_read_result> results;
 
 		elliptics::session s = session(true);
@@ -134,15 +143,18 @@ public:
 			results.emplace_back(s.read_data(key, 0, 0));
 		}
 
-		std::vector<elliptics::read_result_entry> ret;
+		std::vector<status> ret;
 		for (auto it = results.begin(), end = results.end(); it != end; ++it) {
-			ret.push_back(it->get_one());
+			ret.push_back(status(it->get_one()));
 		}
 
 		return ret;
 	}
 
-	elliptics::sync_write_result write(const std::string &key, const std::string &data, size_t reserve_size, bool cache = false) {
+	std::vector<status> write(const std::string &key, const std::string &data, size_t reserve_size, bool cache = false) {
+		if (!m_valid) {
+			return std::vector<status>();
+		}
 		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
 
 		elliptics::session s = session(cache);
@@ -173,12 +185,27 @@ public:
 
 		ctl.fd = -1;
 
-		return s.write_data(ctl).get();
+		std::vector<status> ret;
+		elliptics::sync_write_result res = s.write_data(ctl).get();
+		for (auto it = res.begin(), end = res.end(); it != end; ++it) {
+			ret.emplace_back(status(*it));
+		}
+
+		return ret;
 	}
 
-	elliptics::sync_remove_result remove(const std::string &key) {
+	std::vector<status> remove(const std::string &key) {
+		if (!m_valid) {
+			return std::vector<status>();
+		}
 		elliptics::session s = session(false);
-		return s.remove(key).get();
+		elliptics::sync_remove_result res = s.remove(key).get();
+		std::vector<status> ret;
+		for (auto it = res.begin(), end = res.end(); it != end; ++it) {
+			ret.emplace_back(status(*it));
+		}
+
+		return ret;
 	}
 
 private:
@@ -192,6 +219,14 @@ private:
 
 	std::mutex m_lock;
 	bucket_meta m_meta;
+
+	status invalid_status() {
+		status st;
+		st.error = -EIO;
+		st.message = "bucket: " + m_meta.name + " is not valid";
+
+		return st;
+	}
 
 	elliptics::session session(bool cache) {
 		elliptics::session s(*m_node);
@@ -272,6 +307,46 @@ public:
 		return true;
 	}
 
+	status read(const std::string &bname, const std::string &key) {
+		bucket b = find_bucket(bname);
+		if (!b) {
+			status st;
+			st.error = -ENODEV;
+			st.message = "bucket: " + bname + " : there is no such bucket";
+			return st;
+		}
+
+		return b->read(key);
+	}
+
+	std::vector<status> read_all(const std::string &bname, std::string &key) {
+		bucket b = find_bucket(bname);
+		if (!b) {
+			return std::vector<status>();
+		}
+
+		return b->read_all(key);
+	}
+
+	std::vector<status> write(const std::string &bname, const std::string &key,
+			const std::string &data, size_t reserve_size, bool cache = false) {
+		bucket b = find_bucket(bname);
+		if (!b) {
+			return std::vector<status>();
+		}
+
+		return b->write(key, data, reserve_size, cache);
+	}
+
+	std::vector<status> remove(const std::string &bname, const std::string &key) {
+		bucket b = find_bucket(bname);
+		if (!b) {
+			return std::vector<status>();
+		}
+
+		return b->remove(key);
+	}
+
 private:
 	std::shared_ptr<elliptics::node> m_node;
 
@@ -279,6 +354,16 @@ private:
 	std::vector<int> m_meta_groups;
 
 	std::map<std::string, bucket> m_buckets;
+
+	bucket find_bucket(const std::string &bname) {
+		std::lock_guard<std::mutex> lock(m_lock);
+		auto it = m_buckets.find(bname);
+		if (it == m_buckets.end()) {
+			return bucket();
+		}
+
+		return it->second;
+	}
 
 	std::map<std::string, bucket> read_buckets(const std::vector<int> mgroups, const std::vector<std::string> &bnames) {
 		std::map<std::string, bucket> buckets;
