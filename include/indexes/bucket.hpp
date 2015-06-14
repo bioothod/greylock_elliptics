@@ -151,7 +151,8 @@ public:
 		return ret;
 	}
 
-	std::vector<status> write(const std::string &key, const std::string &data, size_t reserve_size, bool cache = false) {
+	std::vector<status> write(const std::vector<int> groups, const std::string &key,
+			const std::string &data, size_t reserve_size, bool cache = false) {
 		if (!m_valid) {
 			return std::vector<status>();
 		}
@@ -160,6 +161,7 @@ public:
 		elliptics::session s = session(cache);
 
 		s.set_filter(elliptics::filters::all);
+		s.set_groups(groups);
 
 		elliptics::key id(key);
 		s.transform(id);
@@ -192,6 +194,10 @@ public:
 		}
 
 		return ret;
+	}
+
+	std::vector<status> write(const std::string &key, const std::string &data, size_t reserve_size, bool cache = false) {
+		return write(m_meta.groups, key, data, reserve_size, cache);
 	}
 
 	std::vector<status> remove(const std::string &key) {
@@ -319,13 +325,23 @@ public:
 		return b->read(key);
 	}
 
-	std::vector<status> read_all(const std::string &bname, std::string &key) {
+	std::vector<status> read_all(const std::string &bname, const std::string &key) {
 		bucket b = find_bucket(bname);
 		if (!b) {
 			return std::vector<status>();
 		}
 
 		return b->read_all(key);
+	}
+
+	std::vector<status> write(const std::vector<int> groups, const std::string &bname, const std::string &key,
+			const std::string &data, size_t reserve_size, bool cache = false) {
+		bucket b = find_bucket(bname);
+		if (!b) {
+			return std::vector<status>();
+		}
+
+		return b->write(groups, key, data, reserve_size, cache);
 	}
 
 	std::vector<status> write(const std::string &bname, const std::string &key,

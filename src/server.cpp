@@ -1,4 +1,5 @@
 #include "indexes/bucket.hpp"
+#include "indexes/core.hpp"
 
 #include <elliptics/session.hpp>
 
@@ -75,6 +76,34 @@ private:
 	std::vector<std::mutex> m_locks;
 };
 
+class bucket_transport : public indexes::bucket_processor {
+public:
+	bucket_transport(std::shared_ptr<elliptics::node> node) : bucket_processor(node) {}
+
+	indexes::status read(const indexes::eurl &key) {
+		return indexes::bucket_processor::read(key.bucket, key.key);
+	}
+
+	std::vector<indexes::status> read_all(const indexes::eurl &key) {
+		return indexes::bucket_processor::read_all(key.bucket, key.key);
+	}
+
+	std::vector<indexes::status> write(const std::vector<int> groups, const indexes::eurl &key,
+			const std::string &data, size_t reserve_size, bool cache) {
+		return indexes::bucket_processor::write(groups, key.bucket, key.key, data, reserve_size, cache);
+	}
+
+	std::vector<indexes::status> write(const indexes::eurl &key, const std::string &data, bool cache = false) {
+		return indexes::bucket_processor::write(key.bucket, key.key, data, indexes::default_reserve_size, cache);
+	}
+
+	std::vector<indexes::status> remove(const indexes::eurl &key) {
+		return indexes::bucket_processor::remove(key.bucket, key.key);
+	}
+
+private:
+};
+
 class http_server : public thevoid::server<http_server>
 {
 public:
@@ -88,6 +117,11 @@ public:
 		on<on_ping>(
 			options::exact_match("/ping"),
 			options::methods("GET")
+		);
+
+		on<on_index>(
+			options::exact_match("/index"),
+			options::methods("POST")
 		);
 
 		return true;
@@ -107,7 +141,7 @@ private:
 
 	std::shared_ptr<elliptics::node> m_node;
 
-	std::unique_ptr<indexes::bucket_processor> m_bucket;
+	std::unique_ptr<bucket_transport> m_bucket;
 
 	long m_read_timeout = 60;
 	long m_write_timeout = 60;
@@ -126,7 +160,7 @@ private:
 			return false;
 		}
 
-		m_bucket.reset(new indexes::bucket_processor(m_node));
+		m_bucket.reset(new bucket_transport(m_node));
 
 		if (!prepare_session(config)) {
 			return false;
