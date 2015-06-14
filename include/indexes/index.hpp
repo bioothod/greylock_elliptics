@@ -47,7 +47,7 @@ template <typename T>
 class index {
 public:
 	index(T &t, const eurl &sk): m_t(t), m_sk(sk) {
-		std::vector<elliptics::read_result_entry> meta = m_t.read_all(meta_key());
+		std::vector<status> meta = m_t.read_all(meta_key());
 
 		struct separate_index_meta {
 			int group = 0;
@@ -57,25 +57,19 @@ public:
 		std::vector<separate_index_meta> mg;
 
 		for (auto it = meta.begin(), end = meta.end(); it != end; ++it) {
-			if (!it->is_valid()) {
+			if (it->error) {
 				continue;
 			}
 
 			separate_index_meta tmp;
 
-			if (!it->error()) {
-				msgpack::unpacked result;
-				msgpack::unpack(&result, (const char *)it->file().data(), it->file().size());
-				msgpack::object obj = result.get();
+			msgpack::unpacked result;
+			msgpack::unpack(&result, (const char *)it->data.data(), it->data.size());
+			msgpack::object obj = result.get();
 
-				tmp.meta = obj.as<index_meta>();
-			} else if (it->error().code() == -6) {
-				// do not even try to work with non-existing groups
-				// next time will try to recover this group, if we reconnect
-				continue;
-			}
+			tmp.meta = obj.as<index_meta>();
 
-			tmp.group = it->command()->id.group_id;
+			tmp.group = it->group;
 
 			mg.emplace_back(tmp);
 		}
@@ -119,12 +113,12 @@ public:
 		for (auto it = page_begin(), end = page_end(); it != end; ++it) {
 			dprintf("page: %s: %s -> %s\n", it.url().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
 
-			elliptics::sync_write_result wr = m_t.write(recovery_groups, it.url(), it->save(), false);
+			std::vector<status> wr = m_t.write(recovery_groups, it.url(), it->save(), false);
 			
 			recovery_groups.clear();
 			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
-				if (r->is_valid() && !r->error()) {
-					recovery_groups.push_back(r->command()->id.group_id);
+				if (!r->error) {
+					recovery_groups.push_back(r->group);
 				}
 			}
 
@@ -267,13 +261,13 @@ private:
 	}
 
 	std::pair<page, int> search(const eurl &page_key, const key &obj) const {
-		elliptics::read_result_entry e = m_t.read(page_key);
-		if (e.error()) {
-			return std::make_pair(page(), e.error().code());
+		status e = m_t.read(page_key);
+		if (e.error) {
+			return std::make_pair(page(), e.error);
 		}
 
 		page p;
-		p.load(e.file().data(), e.file().size());
+		p.load(e.data.data(), e.data.size());
 
 		int found_pos = p.search_node(obj);
 		if (found_pos < 0) {
@@ -299,14 +293,14 @@ private:
 	// returns true if page at @page_key has been split after insertion
 	// key used to store split part has been saved into @obj.url
 	int insert(const eurl &page_key, const key &obj, recursion &rec) {
-		elliptics::read_result_entry e = m_t.read(page_key);
-		if (e.error()) {
-			return e.error().code();
+		status e = m_t.read(page_key);
+		if (e.error) {
+			return e.error;
 		}
 
 		int err;
 		page p;
-		p.load(e.file().data(), e.file().size());
+		p.load(e.data.data(), e.data.size());
 
 		page split;
 
@@ -466,14 +460,14 @@ private:
 	// returns true if page at @page_key has been split after insertion
 	// key used to store split part has been saved into @obj.url
 	int remove(const eurl &page_key, const key &obj, remove_recursion &rec) {
-		elliptics::read_result_entry e = m_t.read(page_key);
-		if (e.error()) {
-			return e.error().code();
+		status e = m_t.read(page_key);
+		if (e.error) {
+			return e.error;
 		}
 
 		int err;
 		page p;
-		p.load(e.file().data(), e.file().size());
+		p.load(e.data.data(), e.data.size());
 
 		dprintf("remove: %s: page: %s -> %s\n", obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
 
@@ -552,12 +546,11 @@ private:
 		return ret;
 	}
 
-	template <typename EllipticsResult>
-	int check(const EllipticsResult &wr) {
+	int check(const std::vector<status> &wr) {
 		std::vector<int> groups;
 		for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
-			if (!r->error()) {
-				groups.push_back(r->command()->id.group_id);
+			if (!r->error) {
+				groups.push_back(r->group);
 			}
 		}
 

@@ -1,6 +1,7 @@
 #ifndef __INDEXES_ELLIPTICS_HPP
 #define __INDEXES_ELLIPTICS_HPP
 
+#include "indexes/error.hpp"
 #include "indexes/core.hpp"
 
 #include <elliptics/session.hpp>
@@ -31,14 +32,13 @@ public:
 		return m_groups;
 	}
 
-	elliptics::read_result_entry read(const indexes::eurl &key) {
-		dprintf("elliptics read: key: %s\n", key.c_str());
+	status read(const indexes::eurl &key) {
 		elliptics::session s = session(m_groups, true);
 		s.set_namespace(key.bucket);
-		return s.read_data(key.key, 0, 0).get_one();
+		return status(s.read_data(key.key, 0, 0).get_one());
 	}
 
-	std::vector<elliptics::read_result_entry> read_all(const indexes::eurl &key) {
+	std::vector<status> read_all(const indexes::eurl &key) {
 		std::vector<elliptics::async_read_result> results;
 
 		elliptics::session s = session(m_groups, true);
@@ -52,15 +52,15 @@ public:
 			results.emplace_back(s.read_data(key.key, 0, 0));
 		}
 
-		std::vector<elliptics::read_result_entry> ret;
+		std::vector<status> ret;
 		for (auto it = results.begin(), end = results.end(); it != end; ++it) {
-			ret.push_back(it->get_one());
+			ret.push_back(status(it->get_one()));
 		}
 
 		return ret;
 	}
 
-	elliptics::sync_write_result write(const std::vector<int> groups, const indexes::eurl &key, const std::string &data, bool cache) {
+	std::vector<status> write(const std::vector<int> groups, const indexes::eurl &key, const std::string &data, bool cache) {
 		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
 		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
 
@@ -93,17 +93,30 @@ public:
 
 		ctl.fd = -1;
 
-		return s.write_data(ctl).get();
+		std::vector<status> ret;
+		elliptics::sync_write_result res = s.write_data(ctl).get();
+		for (auto it = res.begin(), end = res.end(); it != end; ++it) {
+			ret.emplace_back(status(*it));
+		}
+
+		return ret;
 	}
 
-	elliptics::sync_write_result write(const indexes::eurl &key, const std::string &data, bool cache = false) {
+	std::vector<status> write(const indexes::eurl &key, const std::string &data, bool cache = false) {
 		return write(m_groups, key, data, cache);
 	}
 
-	elliptics::sync_remove_result remove(const indexes::eurl &key) {
+	std::vector<status> remove(const indexes::eurl &key) {
 		elliptics::session s = session(m_groups, false);
 		s.set_namespace(key.bucket);
-		return s.remove(key.key).get();
+
+		elliptics::sync_remove_result res = s.remove(key.key).get();
+		std::vector<status> ret;
+		for (auto it = res.begin(), end = res.end(); it != end; ++it) {
+			ret.emplace_back(status(*it));
+		}
+
+		return ret;
 	}
 
 private:

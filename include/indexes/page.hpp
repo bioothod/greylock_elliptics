@@ -1,6 +1,7 @@
 #ifndef __INDEXES_PAGE_HPP
 #define __INDEXES_PAGE_HPP
 
+#include "indexes/error.hpp"
 #include "indexes/key.hpp"
 
 #include <iterator>
@@ -206,11 +207,11 @@ public:
 
 	page_iterator(T &t, const page &p) : m_t(t), m_page(p) {}
 	page_iterator(T &t, const eurl &url) : m_t(t), m_url(url) {
-		elliptics::read_result_entry e = m_t.read(url);
-		if (e.error())
+		status e = m_t.read(url);
+		if (e.error)
 			return;
 
-		m_page.load(e.file().data(), e.file().size());
+		m_page.load(e.data.data(), e.data.size());
 	}
 	page_iterator(const page_iterator &i) : m_t(i.m_t) {
 		m_page = i.m_page;
@@ -261,12 +262,12 @@ private:
 			m_url = eurl();
 		} else {
 			m_url = m_page.next;
-			elliptics::read_result_entry e = m_t.read(m_url);
-			if (e.error()) {
+			status e = m_t.read(m_url);
+			if (e.error) {
 				m_page = page();
 				return;
 			}
-			m_page.load(e.file().data(), e.file().size());
+			m_page.load(e.data.data(), e.data.size());
 		}
 	}
 };
@@ -329,12 +330,12 @@ private:
 			if (m_page.next.empty()) {
 				m_page = page();
 			} else {
-				elliptics::read_result_entry e = m_t.read(m_page.next);
-				if (e.error()) {
+				status e = m_t.read(m_page.next);
+				if (e.error) {
 					m_page = page();
 					return;
 				}
-				m_page.load(e.file().data(), e.file().size());
+				m_page.load(e.data.data(), e.data.size());
 			}
 		}
 	}
