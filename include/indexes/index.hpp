@@ -113,7 +113,7 @@ public:
 		for (auto it = page_begin(), end = page_end(); it != end; ++it) {
 			dprintf("page: %s: %s -> %s\n", it.url().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
 
-			std::vector<status> wr = m_t.write(recovery_groups, it.url(), it->save(), false);
+			std::vector<status> wr = m_t.write(recovery_groups, it.url(), it->save(), default_reserve_size, false);
 			
 			recovery_groups.clear();
 			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {

@@ -7,6 +7,7 @@
 namespace ioremap { namespace indexes {
 
 static size_t max_page_size = 4096;
+static size_t default_reserve_size = max_page_size * 1.5;
 
 #define dprintf(fmt, a...) do {} while (0)
 //#define dprintf(fmt, a...) printf(fmt, ##a)

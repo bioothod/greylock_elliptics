@@ -60,7 +60,8 @@ public:
 		return ret;
 	}
 
-	std::vector<status> write(const std::vector<int> groups, const indexes::eurl &key, const std::string &data, bool cache) {
+	std::vector<status> write(const std::vector<int> groups, const indexes::eurl &key,
+			const std::string &data, size_t reserve_size, bool cache) {
 		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
 		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
 
@@ -84,7 +85,7 @@ public:
 		ctl.io.user_flags = s.get_user_flags();
 		ctl.io.offset = 0;
 		ctl.io.size = dp.size();
-		ctl.io.num = indexes::max_page_size * 1.5;
+		ctl.io.num = reserve_size;
 		if (ctl.io.size > ctl.io.num) {
 			ctl.io.num = ctl.io.size * 2;
 		}
@@ -103,7 +104,7 @@ public:
 	}
 
 	std::vector<status> write(const indexes::eurl &key, const std::string &data, bool cache = false) {
-		return write(m_groups, key, data, cache);
+		return write(m_groups, key, data, default_reserve_size, cache);
 	}
 
 	std::vector<status> remove(const indexes::eurl &key) {
