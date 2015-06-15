@@ -184,39 +184,50 @@ public:
 			}
 
 
-			std::vector<std::string> raw_indexes;
-			std::vector<std::string> raw_ids;
-
-			for (auto it = idxs.Begin(), idx_end = idxs.End(); it != idx_end; ++it) {
-				if (it->IsString())
-					raw_indexes.push_back(it->GetString());
-			}
-
+			std::vector<indexes::key> keys;
 			for (auto it = ids.Begin(), id_end = ids.End(); it != id_end; ++it) {
-				if (it->IsString())
-					raw_ids.push_back(it->GetString());
-			}
+				if (it->IsObject()) {
+					indexes::key k;
 
+					if (!it->HasMember("key"))
+						continue;
+					if (!it->HasMember("bucket"))
+						continue;
+					if (!it->HasMember("id"))
+						continue;
+
+					const auto &jid = (*it)["id"];
+					const auto &jb = (*it)["bucket"];
+					const auto &jk = (*it)["key"];
+
+					if (!jid.IsString() || !jb.IsString() || !jk.IsString())
+						continue;
+
+					k.url.bucket = jb.GetString();
+					k.url.key = jk.GetString();
+					k.id = jid.GetString();
+
+					keys.emplace_back(k);
+				}
+			}
 
 			std::string bucket = "";
 
-			for (auto idx = raw_indexes.begin(), idx_end = raw_indexes.end(); idx != idx_end; ++idx) {
+			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
+				if (!idx->IsString())
+					continue;
+
 				indexes::eurl start;
 				start.bucket = bucket;
-				start.key = *idx;
+				start.key = idx->GetString();
 
 				indexes::index<bucket_transport> index(*(server()->bucket()), start);
 
-				for (auto id = raw_ids.begin(), id_end = raw_ids.end(); id != id_end; ++id) {
-					indexes::key k;
-					k.url.bucket = bucket;
-					k.url.key = *id;
-					k.id = *id;
-
-					int err = index.insert(k);
+				for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
+					int err = index.insert(*it);
 					if (err < 0) {
-						ILOG_ERROR("url: %s, index: %s, id: %s, error: %d: could not insert new key",
-							req.url().to_human_readable().c_str(), idx->c_str(), id->c_str(), err);
+						ILOG_ERROR("url: %s, index: %s, key: %s, error: %d: could not insert new key",
+							req.url().to_human_readable().c_str(), start.key.c_str(), it->str().c_str(), err);
 						this->send_reply(swarm::http_response::internal_server_error);
 						return;
 					}

@@ -305,12 +305,29 @@ public:
 		std::unique_lock<std::mutex> lock(m_lock);
 
 		m_buckets = buckets;
+		m_bnames = bnames;
 		m_meta_groups = mgroups;
 
 		if (buckets.empty())
 			return false;
 
 		return true;
+	}
+
+	status get_bucket(size_t size) {
+		status st;
+
+		std::lock_guard<std::mutex> lock(m_lock);
+		if (m_buckets.size() == 0) {
+			st.error = -ENODEV;
+			st.message = "there are no suitable buckets for size " + elliptics::lexical_cast(size);
+
+			return st;
+		}
+		size_t idx = rand() % m_buckets.size(); // we do not really care about true randomness here
+
+		st.data = elliptics::data_pointer::copy(m_bnames[idx]);
+		return st;
 	}
 
 	status read(const std::string &bname, const std::string &key) {
@@ -369,6 +386,7 @@ private:
 	std::mutex m_lock;
 	std::vector<int> m_meta_groups;
 
+	std::vector<std::string> m_bnames;
 	std::map<std::string, bucket> m_buckets;
 
 	bucket find_bucket(const std::string &bname) {

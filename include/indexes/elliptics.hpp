@@ -32,6 +32,14 @@ public:
 		return m_groups;
 	}
 
+	status get_bucket(size_t size) const {
+		(void) size;
+
+		status st;
+		st.data = elliptics::data_pointer::copy(m_ns);
+		return st;
+	}
+
 	status read(const indexes::eurl &key) {
 		elliptics::session s = session(m_groups, true);
 		s.set_namespace(key.bucket);

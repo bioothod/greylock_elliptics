@@ -538,8 +538,9 @@ private:
 	}
 
 	eurl generate_page_url() {
+		status st = m_t.get_bucket(default_reserve_size);
 		eurl ret;
-		ret.bucket = m_sk.bucket;
+		ret.bucket = st.data.to_string();
 		ret.key = m_sk.key + "." + elliptics::lexical_cast(m_meta.page_index);
 		dprintf("generated key: %s\n", ret.str().c_str());
 		m_meta.page_index++;
