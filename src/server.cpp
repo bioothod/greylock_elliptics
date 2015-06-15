@@ -176,27 +176,35 @@ public:
 				}
 			}
 
-			std::string bucket = "";
-
 			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
 				if (!idx->IsString())
 					continue;
 
 				indexes::eurl start;
-				start.bucket = bucket;
+				start.bucket = server()->meta_bucket_name();
 				start.key = idx->GetString();
 
-				indexes::index<indexes::bucket_transport> index(*(server()->bucket()), start);
+				server()->lock(start.key);
 
-				for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
-					int err = index.insert(*it);
-					if (err < 0) {
-						ILOG_ERROR("url: %s, index: %s, key: %s, error: %d: could not insert new key",
-							req.url().to_human_readable().c_str(), start.key.c_str(), it->str().c_str(), err);
-						this->send_reply(swarm::http_response::internal_server_error);
-						return;
+				try {
+					indexes::index<indexes::bucket_transport> index(*(server()->bucket()), start);
+
+					for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
+						int err = index.insert(*it);
+						if (err < 0) {
+							ILOG_ERROR("url: %s, index: %s, key: %s, error: %d: could not insert new key",
+								req.url().to_human_readable().c_str(), start.key.c_str(),
+								it->str().c_str(), err);
+							this->send_reply(swarm::http_response::internal_server_error);
+
+							server()->unlock(start.key);
+							return;
+						}
 					}
+				} catch (...) {
 				}
+
+				server()->unlock(start.key);
 			}
 
 			this->send_reply(thevoid::http_response::ok);
@@ -207,11 +215,24 @@ public:
 		return m_bucket;
 	}
 
+	void lock(const std::string &key) {
+		m_lock.lock(key);
+	}
+
+	void unlock(const std::string &key) {
+		m_lock.unlock(key);
+	}
+
+	const std::string &meta_bucket_name() const {
+		return m_meta_bucket;
+	}
+
 private:
 	vector_lock m_lock;
 
 	std::shared_ptr<elliptics::node> m_node;
 
+	std::string m_meta_bucket;
 	std::shared_ptr<indexes::bucket_transport> m_bucket;
 
 	long m_read_timeout = 60;
@@ -317,6 +338,22 @@ private:
 			if (it->IsString())
 				bnames.push_back(it->GetString());
 		}
+
+		if (!config.HasMember("meta-bucket")) {
+			ILOG_ERROR("\"application.meta-bucket\" field is missed");
+			return false;
+		}
+
+		auto &meta_bucket = config["meta-bucket"];
+		if (!meta_bucket.IsString()) {
+			ILOG_ERROR("\"application.meta-bucket\" must be string");
+			return false;
+		}
+
+		m_meta_bucket = meta_bucket.GetString();
+		auto res = std::find(bnames.begin(), bnames.end(), m_meta_bucket);
+		if (res == bnames.end())
+			bnames.push_back(m_meta_bucket);
 
 		if (!config.HasMember("metadata-groups")) {
 			ILOG_ERROR("\"application.metadata-groups\" field is missed");
