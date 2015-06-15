@@ -361,7 +361,7 @@ private:
 
 		indexes::intersect::intersector<T> p(t);
 		std::string start("\0");
-		size_t num = 100;
+		size_t num = same_num / 10;
 		size_t num_found = 0;
 
 		while (true) {
