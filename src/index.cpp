@@ -1,5 +1,6 @@
 #include <iostream>
 
+#include "indexes/bucket_transport.hpp"
 #include "indexes/elliptics.hpp"
 #include "indexes/intersection.hpp"
 
@@ -15,7 +16,7 @@ class test {
 #define __stringify(x...)       __stringify_1(x)
 #define func(name, args...) __stringify(name), name, ##args
 public:
-	test(T &t) {
+	test(T &t, const std::string &bname) : m_bucket(bname) {
 		indexes::eurl start;
 		start.key = "test" + elliptics::lexical_cast(rand());
 		start.bucket = m_bucket;
@@ -410,17 +411,18 @@ int main(int argc, char *argv[])
 
 	bpo::options_description generic("Index test options");
 	generic.add_options()
-		("help", "This help message")
+		("help", "this help message")
 		;
 
-	std::string ns, log_file, log_level, groups;
+	std::vector<std::string> bnames;
+	std::string log_file, log_level, groups;
 	bpo::options_description ell("Elliptics options");
 	ell.add_options()
 		("remote", bpo::value<std::vector<std::string>>(&remotes)->required()->composing(), "remote node: addr:port:family")
 		("log-file", bpo::value<std::string>(&log_file)->default_value("/dev/stdout"), "log file")
 		("log-level", bpo::value<std::string>(&log_level)->default_value("error"), "log level: error, info, notice, debug")
 		("groups", bpo::value<std::string>(&groups)->required(), "groups where index tree is stored: 1:2:3")
-		("namespace", bpo::value<std::string>(&ns)->default_value(""), "Namespace where index tree is stored")
+		("bucket", bpo::value<std::vector<std::string>>(&bnames)->composing(), "use this bucket in tests")
 		;
 
 	bpo::options_description cmdline_options;
@@ -442,15 +444,21 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	indexes::elliptics_transport t(log_file, log_level);
-	t.add_remotes(remotes);
-	t.set_namespace(ns);
-	t.set_groups(elliptics::parse_groups(groups.c_str()));
-
 	time_t tm = time(NULL);
 	srand(tm);
 
 	dprintf("index: init: t: %zd\n", tm);
 
-	test<indexes::elliptics_transport> tt(t);
+	indexes::elliptics_transport t(log_file, log_level);
+	t.add_remotes(remotes);
+
+	if (bnames.size() != 0) {
+		indexes::bucket_transport bt(t.get_node());
+		bt.init(elliptics::parse_groups(groups.c_str()), bnames);
+
+		test<indexes::bucket_transport> tt(bt, bnames[0]);
+	} else {
+		t.set_groups(elliptics::parse_groups(groups.c_str()));
+		test<indexes::elliptics_transport> tt(t, "");
+	}
 }

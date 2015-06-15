@@ -1,4 +1,5 @@
 #include "indexes/bucket.hpp"
+#include "indexes/bucket_transport.hpp"
 #include "indexes/core.hpp"
 #include "indexes/index.hpp"
 
@@ -75,42 +76,6 @@ private:
 	int m_lock_num = 0;
 	int m_lockers = 0;
 	std::vector<std::mutex> m_locks;
-};
-
-class bucket_transport : public indexes::bucket_processor {
-public:
-	bucket_transport(std::shared_ptr<elliptics::node> node) : bucket_processor(node) {}
-
-	indexes::status read(const indexes::eurl &key) {
-		return indexes::bucket_processor::read(key.bucket, key.key);
-	}
-
-	std::vector<indexes::status> read_all(const indexes::eurl &key) {
-		return indexes::bucket_processor::read_all(key.bucket, key.key);
-	}
-
-	std::vector<indexes::status> write(const std::vector<int> groups, const indexes::eurl &key,
-			const std::string &data, size_t reserve_size, bool cache) {
-		return indexes::bucket_processor::write(groups, key.bucket, key.key, data, reserve_size, cache);
-	}
-
-	std::vector<indexes::status> write(const indexes::eurl &key, const std::string &data, bool cache = false) {
-		return indexes::bucket_processor::write(key.bucket, key.key, data, indexes::default_reserve_size, cache);
-	}
-
-	std::vector<indexes::status> remove(const indexes::eurl &key) {
-		return indexes::bucket_processor::remove(key.bucket, key.key);
-	}
-
-	// this method is useless for bucket processing,
-	// each bucket will continue to work with all its groups,
-	// even if some of them are currently unavailable and
-	// index class reports this by setting new groups
-	void set_groups(const std::vector<int> &groups) {
-		(void) groups;
-	}
-
-private:
 };
 
 class http_server : public thevoid::server<http_server>
@@ -221,7 +186,7 @@ public:
 				start.bucket = bucket;
 				start.key = idx->GetString();
 
-				indexes::index<bucket_transport> index(*(server()->bucket()), start);
+				indexes::index<indexes::bucket_transport> index(*(server()->bucket()), start);
 
 				for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
 					int err = index.insert(*it);
@@ -238,7 +203,7 @@ public:
 		}
 	};
 
-	std::shared_ptr<bucket_transport> bucket() {
+	std::shared_ptr<indexes::bucket_transport> bucket() {
 		return m_bucket;
 	}
 
@@ -247,7 +212,7 @@ private:
 
 	std::shared_ptr<elliptics::node> m_node;
 
-	std::shared_ptr<bucket_transport> m_bucket;
+	std::shared_ptr<indexes::bucket_transport> m_bucket;
 
 	long m_read_timeout = 60;
 	long m_write_timeout = 60;
@@ -266,7 +231,7 @@ private:
 			return false;
 		}
 
-		m_bucket.reset(new bucket_transport(m_node));
+		m_bucket.reset(new indexes::bucket_transport(m_node));
 
 		if (!prepare_session(config)) {
 			return false;

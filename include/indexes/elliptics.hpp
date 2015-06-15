@@ -12,12 +12,16 @@ class elliptics_transport {
 public:
 	elliptics_transport(const std::string &log_file, const std::string &log_level):
 	m_log(log_file.c_str(), elliptics::file_logger::parse_level(log_level)),
-	m_node(elliptics::logger(m_log, blackhole::log::attributes_t())) {
+	m_node(new elliptics::node(elliptics::logger(m_log, blackhole::log::attributes_t()))) {
+	}
+
+	std::shared_ptr<elliptics::node> get_node() {
+		return m_node;
 	}
 
 	void add_remotes(const std::vector<std::string> &remotes) {
 		std::vector<elliptics::address> a(remotes.begin(), remotes.end());
-		m_node.add_remote(a);
+		m_node->add_remote(a);
 	}
 
 	void set_namespace(const std::string &ns) {
@@ -130,12 +134,12 @@ public:
 
 private:
 	elliptics::file_logger m_log;
-	elliptics::node m_node;
+	std::shared_ptr<elliptics::node> m_node;
 	std::string m_ns;
 	std::vector<int> m_groups;
 
 	elliptics::session session(const std::vector<int> groups, bool cache) {
-		elliptics::session s(m_node);
+		elliptics::session s(*m_node);
 		s.set_namespace(m_ns);
 		s.set_groups(groups);
 		s.set_timeout(60);
