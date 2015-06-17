@@ -56,7 +56,7 @@ public:
 			std::vector<int> pos;
 
 			int current = -1;
-			for (auto idata_it = idata.begin(); idata_it != idata.end(); ++idata_it) {
+			for (auto idata_it = idata.begin(), idata_end = idata.end(); idata_it != idata_end; ++idata_it) {
 				auto &it = idata_it->begin;
 				auto &e = idata_it->end;
 				++current;
@@ -85,7 +85,7 @@ public:
 			}
 
 			if (res.completed) {
-				start = "";
+				start.clear();
 				break;
 			}
 
