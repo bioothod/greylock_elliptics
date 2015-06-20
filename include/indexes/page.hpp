@@ -7,6 +7,8 @@
 #include <iterator>
 #include <vector>
 
+#include <lz4frame.h>
+
 namespace ioremap { namespace indexes {
 
 #define PAGE_LEAF		(1<<0)
@@ -17,7 +19,11 @@ struct page {
 	size_t total_size = 0;
 	eurl next;
 
-	MSGPACK_DEFINE(flags, objects, total_size, next);
+	enum {
+		serialization_version_raw = 1,
+		serialization_version_packed,
+		serialization_version_max,
+	};
 
 	page(bool leaf = false) {
 		if (leaf) {
@@ -341,7 +347,174 @@ private:
 	}
 };
 
-
 }} // namespace ioremap::indexes
+
+namespace msgpack {
+static inline ioremap::indexes::page &operator >>(msgpack::object o, ioremap::indexes::page &page)
+{
+	if (o.type != msgpack::type::ARRAY) {
+		std::ostringstream ss;
+		ss << "page unpack: type: " << o.type <<
+			", must be: " << msgpack::type::ARRAY <<
+			", size: " << o.via.array.size;
+		throw std::runtime_error(ss.str());
+	}
+
+	object *p = o.via.array.ptr;
+	const uint32_t size = o.via.array.size;
+	uint16_t version = 0;
+	p[0].convert(&version);
+	switch (version) {
+	case ioremap::indexes::page::serialization_version_raw:
+	case ioremap::indexes::page::serialization_version_packed: {
+		if (size != 4) {
+			std::ostringstream ss;
+			ss << "page unpack: array size mismatch: read: " << size << ", must be: 4";
+			throw std::runtime_error(ss.str());
+		}
+
+		p[1].convert(&page.flags);
+		p[2].convert(&page.next);
+
+		switch (version) {
+		case ioremap::indexes::page::serialization_version_raw:
+			p[3].convert(&page.objects);
+			break;
+		case ioremap::indexes::page::serialization_version_packed: {
+			msgpack::unpacked result;
+
+			//msgpack::unpack(&result, raw.data(), raw.size());
+			msgpack::object obj;// = result.get();
+
+			const char *src = p[3].via.raw.ptr;
+			size_t src_size = p[3].via.raw.size;
+
+			LZ4F_decompressionContext_t dctx;
+			LZ4F_errorCode_t err = LZ4F_createDecompressionContext(&dctx, LZ4F_VERSION);
+			if (LZ4F_isError(err)) {
+				std::stringstream ss;
+				ss << "page unpack: " << page.str() <<
+					": expected compressed page (version: " << version << ")"
+					", but failed to create decompression context"
+					", error: " << LZ4F_getErrorName(err) <<
+					", code: " << err;
+				throw std::runtime_error(ss.str());
+			}
+
+			size_t src_orig = src_size;
+
+			LZ4F_frameInfo_t fi;
+			err = LZ4F_getFrameInfo(dctx, &fi, src, &src_size);
+			if (LZ4F_isError(err)) {
+				std::stringstream ss;
+				ss << "page unpack: " << page.str() <<
+					": expected compressed page (version: " << version << ")"
+					", but failed to get frame info"
+					", error: " << LZ4F_getErrorName(err) <<
+					", code: " << err;
+				LZ4F_freeDecompressionContext(dctx);
+				throw std::runtime_error(ss.str());
+			}
+
+			src += src_size;
+			src_size = src_orig - src_size;
+
+			size_t dst_size = ioremap::indexes::max_page_size * 10;
+			// unknown original size
+			if (fi.contentSize != 0)
+				dst_size = fi.contentSize;
+
+			std::string dst_string;
+			dst_string.resize(dst_size);
+			char *dst = const_cast<char *>(dst_string.data());
+
+			while (src_size != 0) {
+				size_t dst_orig = dst_size;
+				size_t src_orig = src_size;
+
+				// only running decompression once, it should process the whole buffer since
+				// compression runs in one go too
+				err = LZ4F_decompress(dctx, dst, &dst_size, src, &src_size, NULL);
+				if (LZ4F_isError(err)) {
+					std::stringstream ss;
+					ss << "page unpack: " << page.str() <<
+						": expected compressed page (version: " << version << ")"
+						", but failed to decompress frame"
+						", error: " << LZ4F_getErrorName(err) <<
+						", code: " << err;
+					LZ4F_freeDecompressionContext(dctx);
+					throw std::runtime_error(ss.str());
+				}
+
+				dst += dst_size;
+				dst_size = dst_orig - dst_size;
+
+				src += src_size;
+				src_size = src_orig - src_size;
+			}
+
+			dst_string.resize(dst - dst_string.data());
+
+			LZ4F_freeDecompressionContext(dctx);
+
+			msgpack::unpack(&result, dst_string.data(), dst_string.size());
+			obj = result.get();
+
+			obj.convert(&page.objects);
+			page.recalculate_size();
+		}
+		}
+		break;
+	}
+	default: {
+		std::ostringstream ss;
+		ss << "page unpack: version mismatch: read: " << version <<
+			", must be: < " << ioremap::indexes::page::serialization_version_max;
+		throw std::runtime_error(ss.str());
+	}
+	}
+
+	return page;
+}
+
+template <typename Stream>
+inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::indexes::page &p)
+{
+	o.pack_array(4);
+	o.pack((int)ioremap::indexes::page::serialization_version_packed);
+	o.pack(p.flags);
+	o.pack(p.next);
+
+	std::stringstream ss;
+	msgpack::pack(ss, p.objects);
+
+	const std::string &s = ss.str();
+
+	size_t max_size = LZ4F_compressFrameBound(s.size(), NULL);
+	std::string buf;
+	buf.resize(max_size);
+	size_t real_size = LZ4F_compressFrame((char *)buf.data(), max_size, (char *)s.data(), s.size(), NULL);
+	if (LZ4F_isError(real_size)) {
+		std::stringstream ss;
+		ss << "page pack: " << p.str() <<
+			": failed to compress frame:" <<
+			" max frame bound: " << max_size <<
+			", packed raw size: " << s.size() <<
+			", error: " << LZ4F_getErrorName(real_size) <<
+			", code: " << real_size;
+		throw std::runtime_error(ss.str());
+	}
+
+	buf.resize(real_size);
+
+	o.pack_raw(buf.size());
+	o.pack_raw_body(buf.data(), buf.size());
+
+	dprintf("pack: objects: %zd, total_size: %zd, data size: %zd -> %zd\n", p.objects.size(), p.total_size, s.size(), buf.size());
+
+	return o;
+}
+
+} // namespace msgpack
 
 #endif // __INDEXES_PAGE_HPP
