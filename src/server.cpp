@@ -581,6 +581,18 @@ private:
 			}
 		}
 
+		if (config.HasMember("max-page-size")) {
+			auto &ps = config["max-page-size"];
+			if (ps.IsNumber())
+				ioremap::indexes::max_page_size = ps.GetInt();
+		}
+
+		if (config.HasMember("reserve-size")) {
+			auto &ps = config["reserve-size"];
+			if (ps.IsNumber())
+				ioremap::indexes::default_reserve_size = ps.GetInt();
+		}
+
 		return true;
 	}
 };
