@@ -36,6 +36,8 @@ class indexes_client_parser(HTMLParser):
 
         if enc:
             self.set_encoding(enc)
+        else:
+            self.set_encoding('')
 
     def detect_encoding(self, text):
         self.detector.reset()
@@ -74,8 +76,11 @@ class indexes_client_parser(HTMLParser):
 
     # we suppose that tags do not contain meaningful text
     def handle_starttag(self, tag, attrs):
-        decoded = self.recode(tag).lower()
-        self.parse_regexps(decoded)
+        for a in attrs:
+            self.handle_data(a)
+
+        self.handle_data(tag)
+
     def handle_endtag(self, tag):
         pass
     def handle_data(self, data):
