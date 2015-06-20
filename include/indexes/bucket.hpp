@@ -317,6 +317,8 @@ public:
 	status get_bucket(size_t size) {
 		status st;
 
+		std::vector<std::string> good_buckets;
+
 		std::lock_guard<std::mutex> lock(m_lock);
 		if (m_buckets.size() == 0) {
 			st.error = -ENODEV;
@@ -324,9 +326,16 @@ public:
 
 			return st;
 		}
-		size_t idx = rand() % m_buckets.size(); // we do not really care about true randomness here
 
-		st.data = elliptics::data_pointer::copy(m_bnames[idx]);
+		for (auto it = m_buckets.begin(), end = m_buckets.end(); it != end; ++it) {
+			if (it->second->valid()) {
+				good_buckets.push_back(it->first);
+			}
+		}
+
+		size_t idx = rand() % good_buckets.size(); // we do not really care about true randomness here
+
+		st.data = elliptics::data_pointer::copy(good_buckets[idx]);
 		return st;
 	}
 

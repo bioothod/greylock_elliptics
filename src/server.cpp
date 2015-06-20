@@ -172,6 +172,11 @@ public:
 			options::methods("POST")
 		);
 
+		on<on_search>(
+			options::exact_match("/search"),
+			options::methods("POST")
+		);
+
 		return true;
 	}
 
@@ -254,15 +259,15 @@ public:
 				rapidjson::Value key(rapidjson::kObjectType);
 
 				rapidjson::Value kv(it->url.key.c_str(), it->url.key.size(), allocator);
-				kv.AddMember("key", kv, allocator);
+				key.AddMember("key", kv, allocator);
 
 				rapidjson::Value bv(it->url.bucket.c_str(), it->url.bucket.size(), allocator);
-				kv.AddMember("bucket", bv, allocator);
+				key.AddMember("bucket", bv, allocator);
 
 				rapidjson::Value idv(it->id.c_str(), it->id.size(), allocator);
-				kv.AddMember("id", idv, allocator);
+				key.AddMember("id", idv, allocator);
 
-				ids.PushBack(kv, allocator);
+				ids.PushBack(key, allocator);
 			}
 
 			ret.AddMember("ids", ids, allocator);
@@ -290,10 +295,13 @@ public:
 				std::string &page_start, int page_num, std::vector<indexes::key> &result) {
 			indexes::intersect::intersector<indexes::bucket_transport> p(*(server()->bucket()));
 
+			std::vector<locker<http_server>> lockers;
 			std::vector<std::unique_lock<locker<http_server>>> locks;
 			for (auto it = raw_indexes.begin(), end = raw_indexes.end(); it != end; ++it) {
 				locker<http_server> l(server(), it->key);
-				std::unique_lock<locker<http_server>> lk(l);
+				lockers.emplace_back(l);
+
+				std::unique_lock<locker<http_server>> lk(lockers.back());
 				locks.emplace_back(std::move(lk));
 			}
 
@@ -391,7 +399,7 @@ public:
 					int err = index.insert(*it);
 					if (err < 0) {
 						ILOG_ERROR("url: %s, index: %s, key: %s, error: %d: could not insert new key",
-							req.url().to_human_readable().c_str(), start.key.c_str(),
+							req.url().to_human_readable().c_str(), start.str().c_str(),
 							it->str().c_str(), err);
 						this->send_reply(swarm::http_response::internal_server_error);
 						return;
