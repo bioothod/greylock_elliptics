@@ -140,7 +140,11 @@ if __name__ == '__main__':
     else:
         iparser.feed(args.file.read())
 
-    print "Tokens: %d" % (len(iparser.words))
+    total_size = 0
+    for t in iparser.words:
+        total_size += len(t)
+
+    print "Tokens: %d, their total size: %d" % (len(iparser.words), total_size)
     for i in range(1000):
         id = {}
         id["id"] = "%s.%d" % (args.id, i)
