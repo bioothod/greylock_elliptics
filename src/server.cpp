@@ -533,10 +533,10 @@ private:
 
 		auto &buckets = config["buckets"];
 
-		std::vector<std::string> bnames;
+		std::set<std::string> bnames;
 		for (auto it = buckets.Begin(), end = buckets.End(); it != end; ++it) {
 			if (it->IsString())
-				bnames.push_back(it->GetString());
+				bnames.insert(it->GetString());
 		}
 
 		if (!config.HasMember("meta-bucket")) {
@@ -550,10 +550,12 @@ private:
 			return false;
 		}
 
-		m_meta_bucket = meta_bucket.GetString();
-		auto res = std::find(bnames.begin(), bnames.end(), m_meta_bucket);
-		if (res == bnames.end())
-			bnames.push_back(m_meta_bucket);
+		// XXX there should be no meta bucket.
+		// XXX meta bucket was created to host all index starts (i.e. index metadata and the first page)
+		// XXX but it should be dynamically allocated just like all other pages
+		// XXX instead of using @m_meta_bucket/@meta_bucket_name() server should grab
+		// XXX new bucket via @get_bucket(), and client has to provide bucket name in the index methods.
+		bnames.insert(m_meta_bucket);
 
 		if (!config.HasMember("metadata-groups")) {
 			ILOG_ERROR("\"application.metadata-groups\" field is missed");
@@ -567,7 +569,7 @@ private:
 				mgroups.push_back(it->GetInt());
 		}
 
-		if (!m_bucket->init(mgroups, bnames))
+		if (!m_bucket->init(mgroups, std::vector<std::string>(bnames.begin(), bnames.end())))
 			return false;
 
 		return true;
