@@ -125,9 +125,30 @@ if __name__ == '__main__':
     if args.email:
         p = Parser()
         msg = p.parse(args.file)
-        for t in msg.items():
-            iparser.feed(t[0])
-            iparser.feed(t[1])
+
+        from email.header import decode_header
+        def print_chunks(h):
+            ret = []
+            for s in re.findall("\"*([\\/\-@\.\<\>\w\d\?\=]*)\"*", h):
+                if len(s) == 0:
+                    continue
+
+                #print s
+                for x in decode_header(s):
+                    if not x[1]:
+                        ret.append(x[0])
+                        #print x[0]
+                    else:
+                        #print x[0].decode(x[1]).encode('utf8')
+                        ret.append(x[0].decode(x[1]))
+
+            return ' '.join(ret)
+
+        msg['Subject'] = print_chunks(msg['Subject'])
+        msg['From'] = print_chunks(msg['From'])
+        msg['To'] = print_chunks(msg['To'])
+
+        # should properly index to/from/subject
 
         if not msg.is_multipart():
             iparser.set_encoding_from_email(msg)
