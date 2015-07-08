@@ -535,18 +535,13 @@ private:
 
 		std::set<std::string> bnames;
 		for (auto it = buckets.Begin(), end = buckets.End(); it != end; ++it) {
-			if (it->IsString())
+			if (it->IsString()) {
 				bnames.insert(it->GetString());
+			}
 		}
 
 		if (!config.HasMember("meta-bucket")) {
 			ILOG_ERROR("\"application.meta-bucket\" field is missed");
-			return false;
-		}
-
-		auto &meta_bucket = config["meta-bucket"];
-		if (!meta_bucket.IsString()) {
-			ILOG_ERROR("\"application.meta-bucket\" must be string");
 			return false;
 		}
 
@@ -555,7 +550,14 @@ private:
 		// XXX but it should be dynamically allocated just like all other pages
 		// XXX instead of using @m_meta_bucket/@meta_bucket_name() server should grab
 		// XXX new bucket via @get_bucket(), and client has to provide bucket name in the index methods.
+		auto &meta_bucket = config["meta-bucket"];
+		if (!meta_bucket.IsString()) {
+			ILOG_ERROR("\"application.meta-bucket\" must be string");
+			return false;
+		}
+		m_meta_bucket = meta_bucket.GetString();
 		bnames.insert(m_meta_bucket);
+
 
 		if (!config.HasMember("metadata-groups")) {
 			ILOG_ERROR("\"application.metadata-groups\" field is missed");
