@@ -23,7 +23,6 @@ class indexes_client_parser(HTMLParser):
         self.key = key
 
         self.words = set()
-        self.normalized_words = set()
 
         self.encoding = ''
         self.url = re.compile('(\w+)(\.\w+)+(:\d+)?(/+\w+)+')
@@ -148,10 +147,11 @@ class indexes_client_parser(HTMLParser):
 
         feed_check_multipart(msg)
 
-    def normalize(self, normalize_url):
+    def normalize(self, normalize_url, tokens):
         raw = {}
-        raw['text'] = '. '.join(self.words)
+        raw['text'] = ' '.join(tokens)
 
+        print raw['text']
         # this will be a unicode string
         js = json.dumps(raw, encoding='utf8', ensure_ascii=False)
 
@@ -163,12 +163,18 @@ class indexes_client_parser(HTMLParser):
         if r.status_code != requests.codes.ok:
             raise RuntimeError("Could not normalize text: url: %s, status: %d" % (normalize_url, r.status_code))
 
+        words = set()
+
         ret = r.json()
         for k, v in ret['keys'].items():
-            self.normalized_words.add(v)
-            print "%s -> %s" % (k, v)
+            words.add(v)
+            print("%s -> %s" % (k, v))
+
+        return words
 
     def index(self, index_url):
+        words = self.normalize(args.normalize_url, self.words)
+
         raw = {}
         raw["id"] = self.id
         raw["bucket"] = self.bucket
@@ -178,7 +184,7 @@ class indexes_client_parser(HTMLParser):
         msg["ids"] = [raw]
         msg["indexes"] = []
 
-        for w in self.normalized_words:
+        for w in words:
             msg["indexes"].append(w)
 
         # this will be a unicode string
@@ -186,7 +192,7 @@ class indexes_client_parser(HTMLParser):
         #print js.decode('unicode_internal').encode('utf8')
 
         headers = {}
-        timeout = len(self.normalized_words) / 50 + 10
+        timeout = len(words) / 50 + 10
 
         #print js.decode('unicode_internal').encode('utf8')
         r = requests.post(index_url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
@@ -194,6 +200,36 @@ class indexes_client_parser(HTMLParser):
             raise RuntimeError("Could not update indexes: url: %s, status: %d" % (index_url, r.status_code))
 
         print "Index has been successfully updated for ID %s" % raw["id"]
+
+    def search(self, search_url, text, paging_start, paging_num):
+        words = self.normalize(args.normalize_url, [text])
+
+        s = {}
+        p = {}
+        p["num"] = paging_num
+        p["start"] = paging_start
+        s["paging"] = p
+        s["indexes"] = []
+        for w in words:
+            s["indexes"].append(w)
+
+        # this will be a unicode string
+        js = json.dumps(s, encoding='utf8', ensure_ascii=False)
+
+        url = search_url
+        headers = {}
+        timeout = len(words) / 100 + 10
+
+        r = requests.post(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
+        if r.status_code != requests.codes.ok:
+            raise RuntimeError("Could not search for indexes: url: %s, status: %d" % (search_url, r.status_code))
+
+        res = json.loads(r.text)
+
+        print "completed: %s" % res["completed"]
+        print "paging: num: %d, start: '%s'" % (res["paging"]["num"], res["paging"]["start"])
+        for k in res["ids"]:
+            print "bucket: '%s', key: '%s', id: '%s'" % (k["bucket"], k["key"], k["id"])
 
 
 if __name__ == '__main__':
@@ -213,25 +249,37 @@ if __name__ == '__main__':
 
     parser.add_argument('--normalize-url', dest='normalize_url', action='store', required=True,
             help='URL used to normalize data, for example: http://example.com/normalize')
-    parser.add_argument('--index-url', dest='index_url', action='store', required=True,
+    parser.add_argument('--index-url', dest='index_url', action='store',
             help='URL used to index data, for example: http://example.com/index')
+    parser.add_argument('--search-url', dest='search_url', action='store',
+            help='URL used to search for data, for example: http://example.com/search')
+
+    parser.add_argument('--search', dest='search', action='store',
+            help='Text to search (documents containg every token will be returned)')
+    parser.add_argument('--page-num', dest='page_num', action='store', default=100,
+            help='Maximum number of documents for given search request')
+    parser.add_argument('--page-start', dest='page_start', action='store', default='',
+            help='Start token for the second and higher search result pages ' +
+                 '(this token is returned by server and should be set for the next request)')
 
 
     args = parser.parse_args()
 
-    if not args.email and not args.id:
-        print("You must specify ID: it will be generated either from email (requires --email option), "
-                "or it must be provided via --id option")
-        exit(-1)
-
     iparser = indexes_client_parser(args.id, args.bucket, args.key)
 
-    if args.email:
-        iparser.feed_email(args.file)
-    else:
-        iparser.feed(args.file.read())
+    if not args.search:
+        if not args.email and not args.id:
+            print("You must specify ID: it will be generated either from email (requires --email option), "
+                    "or it must be provided via --id option")
+            exit(-1)
 
-    print "id: %s" % (iparser.id)
-    iparser.normalize(args.normalize_url)
-    iparser.index(args.index_url)
+        if args.email:
+            iparser.feed_email(args.file)
+        else:
+            iparser.feed(args.file.read())
+
+        print "id: %s" % (iparser.id)
+        iparser.index(args.index_url)
+    else:
+        iparser.search(args.search_url, args.search, args.page_start, args.page_num)
 
