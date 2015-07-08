@@ -13,6 +13,7 @@ from htmlentitydefs import name2codepoint
 from chardet.universaldetector import UniversalDetector
 
 from email.parser import Parser
+from email.utils import parseaddr
 
 class indexes_client_parser(HTMLParser):
     def __init__(self):
@@ -32,7 +33,8 @@ class indexes_client_parser(HTMLParser):
         enc = msg.get_content_charset()
         if not enc:
             charset = msg.get_charset()
-            enc = charset.input_codec
+            if charset:
+                enc = charset.input_codec
 
         if enc:
             self.set_encoding(enc)
@@ -74,7 +76,7 @@ class indexes_client_parser(HTMLParser):
             self.words.add(s)
             #print "mail: %s" % s.decode('unicode_internal').encode('utf8')
 
-    # we suppose that tags do not contain meaningful text
+    # tags may contain meaningful data too
     def handle_starttag(self, tag, attrs):
         for a in attrs:
             self.handle_data(a)
@@ -107,7 +109,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Elliptics indexing client.')
     parser.add_argument('--file', dest='file', action='store', required=True, type=argparse.FileType('r'),
             help='Input file to parse and index')
-    parser.add_argument('--id', dest='id', action='store', required=True,
+    parser.add_argument('--id', dest='id', action='store',
             help='ID of the document used in indexing')
     parser.add_argument('--email', dest='email', action='store_true', default=False,
             help='Provided document is an email and should be parsed accordingly')
@@ -122,58 +124,87 @@ if __name__ == '__main__':
 
     iparser = indexes_client_parser()
 
+    if not args.email and not args.id:
+        print("You must specify ID: it will be generated either from email (requires --email option), "
+                "or it must be provided via --id option")
+        exit(-1)
+
+    id = ''
+    if args.id:
+        id = args.id
+
     if args.email:
         p = Parser()
         msg = p.parse(args.file)
 
         from email.header import decode_header
-        def print_chunks(h):
+        def parse_header(h):
+            if not h or len(h) == 0:
+                return []
+
             ret = []
-            for s in re.findall("\"*([\\/\-@\.\<\>\w\d\?\=]*)\"*", h):
-                if len(s) == 0:
-                    continue
+            for x in decode_header(h):
+                if not x[1]:
+                    ret.append(x[0].encode('utf8'))
+                    print x[0]
+                else:
+                    print x[0].decode(x[1]).encode('utf8')
+                    ret.append(x[0].decode(x[1]).encode('utf8'))
 
-                #print s
-                for x in decode_header(s):
-                    if not x[1]:
-                        ret.append(x[0])
-                        #print x[0]
-                    else:
-                        #print x[0].decode(x[1]).encode('utf8')
-                        ret.append(x[0].decode(x[1]))
+            return ret
 
-            return ' '.join(ret)
+        def get_id(ret):
+            for r in ret:
+                addr = parseaddr(r)
+                if len(addr[1]) != 0:
+                    # sanity check to find non-local addresses, i.e. not 'username', but something like 'name@host.domain')
+                    m = re.match("([^@|\s]+@[^@]+\.[^@|\s]+)", addr[1])
+                    if m:
+                        return m.group(1)
+            return None
 
-        msg['Subject'] = print_chunks(msg['Subject'])
-        msg['From'] = print_chunks(msg['From'])
-        msg['To'] = print_chunks(msg['To'])
+        def feed_header(ret):
+            print ret
+            for r in ret:
+                iparser.feed(r)
 
-        # should properly index to/from/subject
+        feed_header(parse_header(msg['Subject']))
+        feed_header(parse_header(msg['Cc']))
+        feed_header(parse_header(msg['Bcc']))
+        feed_header(parse_header(msg['From']))
 
-        if not msg.is_multipart():
-            iparser.set_encoding_from_email(msg)
-            iparser.feed(msg.get_payload(decode=True))
-        else:
-            # these are multipart parts as Message
-            for m in msg.get_payload():
-                iparser.set_encoding_from_email(m)
-                iparser.feed(m.get_payload(decode=True))
+        h = parse_header(msg['To'])
+        feed_header(h)
+
+        if len(id) == 0:
+            id = get_id(h)
+            if not id or len(id) == 0:
+                print("Could not detect ID in email (there is no 'To' header) and no ID has been provided via command line, exiting")
+                exit(-1)
+
+
+        def feed_check_multipart(msg):
+            if not msg.is_multipart():
+                iparser.set_encoding_from_email(msg)
+                iparser.feed(msg.get_payload(decode=True))
+            else:
+                # these are multipart parts as email.Message objects
+                for m in msg.get_payload():
+                    feed_check_multipart(m)
+
+        feed_check_multipart(msg)
     else:
         iparser.feed(args.file.read())
 
-    total_size = 0
-    for t in iparser.words:
-        total_size += len(t)
-
-    print "Tokens: %d, their total size: %d" % (len(iparser.words), total_size)
+    print "Tokens: %d, id: %s" % (len(iparser.words), id)
     for i in range(1000):
-        id = {}
-        id["id"] = "%s.%d" % (args.id, i)
-        id["bucket"] = args.bucket
-        id["key"] = args.key
+        raw = {}
+        raw["id"] = "%s.%d" % (id, i)
+        raw["bucket"] = args.bucket
+        raw["key"] = args.key
 
         msg = {}
-        msg["ids"] = [id]
+        msg["ids"] = [raw]
         msg["indexes"] = []
 
         for w in iparser.words:
