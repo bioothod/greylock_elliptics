@@ -10,17 +10,21 @@ import sys
 from HTMLParser import HTMLParser
 from htmlentitydefs import name2codepoint
 
-from chardet.universaldetector import UniversalDetector
-
 from email.parser import Parser
 from email.utils import parseaddr
 
 class indexes_client_parser(HTMLParser):
-    def __init__(self):
+    def __init__(self, id, bucket, key):
         HTMLParser.__init__(self)
 
+        # if this ID lives in elliptics, bucket and key can be used to read the data
+        self.id = id
+        self.bucket = bucket
+        self.key = key
+
         self.words = set()
-        self.detector = UniversalDetector()
+        self.normalized_words = set()
+
         self.encoding = ''
         self.url = re.compile('(\w+)(\.\w+)+(:\d+)?(/+\w+)+')
         self.host = re.compile('(\w+)(\.\w+)+(:\d+)?')
@@ -41,22 +45,16 @@ class indexes_client_parser(HTMLParser):
         else:
             self.set_encoding('')
 
-    def detect_encoding(self, text):
-        self.detector.reset()
-        self.detector.feed(text)
-        self.detector.close()
-
-        return self.detector.result['encoding']
-
     def recode(self, text):
         enc = self.encoding
-        if enc == '':
-            enc = self.detect_encoding(text)
 
         if enc == 'binary':
             return u''
 
         if enc == 'unknown-8bit':
+            return text
+
+        if enc == '':
             return text
 
         #print text.decode(enc), enc
@@ -86,56 +84,14 @@ class indexes_client_parser(HTMLParser):
     def handle_endtag(self, tag):
         pass
     def handle_data(self, data):
-        rep = '`-=][\';/.,~!@#$%^&*()+}{\":?><\\|'
-        rep_char = ' '
-
         decoded = self.recode(data).lower()
-        
-        cleared = ''
-        for x in decoded:
-            if x in rep:
-                cleared += rep_char
-            else:
-                cleared += x
+        if len(decoded) != 0:
+            self.words.add(decoded)
+            self.parse_regexps(decoded)
 
-        for w in cleared.split():
-            if len(w) > 0:
-                #print "%s" % w.decode('unicode_internal').encode('utf8')
-                self.words.add(w)
-
-        self.parse_regexps(decoded)
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Elliptics indexing client.')
-    parser.add_argument('--file', dest='file', action='store', required=True, type=argparse.FileType('r'),
-            help='Input file to parse and index')
-    parser.add_argument('--id', dest='id', action='store',
-            help='ID of the document used in indexing')
-    parser.add_argument('--email', dest='email', action='store_true', default=False,
-            help='Provided document is an email and should be parsed accordingly')
-    parser.add_argument('--indexes-server', dest='iserver', action='store', required=True,
-            help='Indexes server, for example: http://example.com')
-    parser.add_argument('--bucket', dest='bucket', action='store', default="",
-            help='Bucket (if stored in elliptics) of the document used in indexing')
-    parser.add_argument('--key', dest='key', action='store', default="",
-            help='Key (if stored in elliptics) of the document used in indexing')
-
-    args = parser.parse_args()
-
-    iparser = indexes_client_parser()
-
-    if not args.email and not args.id:
-        print("You must specify ID: it will be generated either from email (requires --email option), "
-                "or it must be provided via --id option")
-        exit(-1)
-
-    id = ''
-    if args.id:
-        id = args.id
-
-    if args.email:
+    def feed_email(self, reader):
         p = Parser()
-        msg = p.parse(args.file)
+        msg = p.parse(reader)
 
         from email.header import decode_header
         def parse_header(h):
@@ -145,11 +101,11 @@ if __name__ == '__main__':
             ret = []
             for x in decode_header(h):
                 if not x[1]:
-                    ret.append(x[0].encode('utf8'))
-                    print x[0]
+                    ret.append(x[0])
+                    #print x[0]
                 else:
-                    print x[0].decode(x[1]).encode('utf8')
-                    ret.append(x[0].decode(x[1]).encode('utf8'))
+                    #print x[0].decode(x[1]).encode('utf8')
+                    ret.append(x[0].decode(x[1]))
 
             return ret
 
@@ -164,9 +120,8 @@ if __name__ == '__main__':
             return None
 
         def feed_header(ret):
-            print ret
             for r in ret:
-                iparser.feed(r)
+                self.words.add(r)
 
         feed_header(parse_header(msg['Subject']))
         feed_header(parse_header(msg['Cc']))
@@ -176,53 +131,107 @@ if __name__ == '__main__':
         h = parse_header(msg['To'])
         feed_header(h)
 
-        if len(id) == 0:
-            id = get_id(h)
-            if not id or len(id) == 0:
-                print("Could not detect ID in email (there is no 'To' header) and no ID has been provided via command line, exiting")
-                exit(-1)
-
+        if not self.id or len(self.id) == 0:
+            self.id = get_id(h)
+            if not self.id or len(self.id) == 0:
+                raise NameError("Could not detect ID in email (there is no 'To' header) and "
+                        "no ID has been provided via command line, exiting")
 
         def feed_check_multipart(msg):
             if not msg.is_multipart():
-                iparser.set_encoding_from_email(msg)
-                iparser.feed(msg.get_payload(decode=True))
+                self.set_encoding_from_email(msg)
+                self.feed(msg.get_payload(decode=True))
             else:
                 # these are multipart parts as email.Message objects
                 for m in msg.get_payload():
                     feed_check_multipart(m)
 
         feed_check_multipart(msg)
-    else:
-        iparser.feed(args.file.read())
 
-    print "Tokens: %d, id: %s" % (len(iparser.words), id)
-    for i in range(1000):
+    def normalize(self, normalize_url):
         raw = {}
-        raw["id"] = "%s.%d" % (id, i)
-        raw["bucket"] = args.bucket
-        raw["key"] = args.key
+        raw['text'] = '. '.join(self.words)
+
+        # this will be a unicode string
+        js = json.dumps(raw, encoding='utf8', ensure_ascii=False)
+
+        headers = {}
+        timeout = len(js) / 1000 + 10
+
+        #print js.decode('unicode_internal').encode('utf8')
+        r = requests.post(normalize_url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
+        if r.status_code != requests.codes.ok:
+            raise RuntimeError("Could not normalize text: url: %s, status: %d" % (normalize_url, r.status_code))
+
+        ret = r.json()
+        for k, v in ret['keys'].items():
+            self.normalized_words.add(v)
+            print "%s -> %s" % (k, v)
+
+    def index(self, index_url):
+        raw = {}
+        raw["id"] = self.id
+        raw["bucket"] = self.bucket
+        raw["key"] = self.key
 
         msg = {}
         msg["ids"] = [raw]
         msg["indexes"] = []
 
-        for w in iparser.words:
+        for w in self.normalized_words:
             msg["indexes"].append(w)
 
         # this will be a unicode string
         js = json.dumps(msg, encoding='utf8', ensure_ascii=False)
+        #print js.decode('unicode_internal').encode('utf8')
 
-        url = args.iserver + '/index'
         headers = {}
-        timeout = 3 * len(iparser.words)
+        timeout = len(self.normalized_words) / 50 + 10
 
         #print js.decode('unicode_internal').encode('utf8')
-        r = requests.post(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
+        r = requests.post(index_url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
         if r.status_code != requests.codes.ok:
-            print "Could not update indexes:", r.status_code
-            exit(-1)
+            raise RuntimeError("Could not update indexes: url: %s, status: %d" % (index_url, r.status_code))
 
-        print "Index has been successfully updated for ID %s" % id["id"]
-    #print js.decode('unicode_internal').encode('utf8')
+        print "Index has been successfully updated for ID %s" % raw["id"]
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Elliptics indexing client.')
+    parser.add_argument('--file', dest='file', action='store', required=True, type=argparse.FileType('r'),
+            help='Input file to parse and index')
+
+    parser.add_argument('--id', dest='id', action='store',
+            help='ID of the document used in indexing')
+    parser.add_argument('--bucket', dest='bucket', action='store', default="",
+            help='Bucket (if stored in elliptics) of the document used in indexing')
+    parser.add_argument('--key', dest='key', action='store', default="",
+            help='Key (if stored in elliptics) of the document used in indexing')
+
+    parser.add_argument('--email', dest='email', action='store_true', default=False,
+            help='Provided document is an email and should be parsed accordingly')
+
+    parser.add_argument('--normalize-url', dest='normalize_url', action='store', required=True,
+            help='URL used to normalize data, for example: http://example.com/normalize')
+    parser.add_argument('--index-url', dest='index_url', action='store', required=True,
+            help='URL used to index data, for example: http://example.com/index')
+
+
+    args = parser.parse_args()
+
+    if not args.email and not args.id:
+        print("You must specify ID: it will be generated either from email (requires --email option), "
+                "or it must be provided via --id option")
+        exit(-1)
+
+    iparser = indexes_client_parser(args.id, args.bucket, args.key)
+
+    if args.email:
+        iparser.feed_email(args.file)
+    else:
+        iparser.feed(args.file.read())
+
+    print "id: %s" % (iparser.id)
+    iparser.normalize(args.normalize_url)
+    iparser.index(args.index_url)
 
