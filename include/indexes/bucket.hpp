@@ -103,6 +103,9 @@ public:
 
 		m_reloaded = false;
 
+		elliptics::logger &log = m_node->get_log();
+
+		BH_LOG(log, DNET_LOG_INFO, "reload: going to reload bucket: %s", m_meta.name.c_str());
 		s.read_data(m_meta.name, 0, 0).connect(
 			std::bind(&raw_bucket::reload_completed, this, std::placeholders::_1, std::placeholders::_2));
 	}
@@ -279,7 +282,7 @@ private:
 
 			m_valid = true;
 
-			BH_LOG(log, DNET_LOG_NOTICE, "meta_unpack: bucket: %s, acls: %ld, flags: 0x%lx, groups: %s",
+			BH_LOG(log, DNET_LOG_INFO, "meta_unpack: bucket: %s, acls: %ld, flags: 0x%lx, groups: %s",
 					m_meta.name.c_str(), m_meta.acl.size(), m_meta.flags, ss.str().c_str());
 		} catch (const std::exception &e) {
 			m_valid = false;
@@ -419,7 +422,7 @@ private:
 		for (auto it = buckets.begin(), end = buckets.end(); it != end; ++it) {
 			it->second->wait_for_reload();
 
-			BH_LOG(log, DNET_LOG_NOTICE, "read_buckets: bucket: %s: reloaded, valid: %d", it->first.c_str(), it->second->valid());
+			BH_LOG(log, DNET_LOG_INFO, "read_buckets: bucket: %s: reloaded, valid: %d", it->first.c_str(), it->second->valid());
 		}
 
 		return buckets;
