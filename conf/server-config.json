@@ -6,7 +6,7 @@
     "threads": 2,
     "buffer_size": 65536,
 	"logger": {
-        "level": "error",
+        "level": "info",
         "frontends": [
             {
                 "formatter": {
@@ -26,7 +26,7 @@
         "fork": false,
         "uid": 1000
     },
-    "monitor-port": 21234,
+    "monitor-port": 21235,
     "request_header": "X-Request",
     "trace_header": "X-Trace",
     "application": {
