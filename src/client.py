@@ -131,7 +131,6 @@ class indexes_client_parser(HTMLParser):
 
         def feed_header(ret):
             for r in ret:
-                print "added: %s" % r
                 self.words.add(r)
 
         feed_header(parse_header(msg['Subject']))
@@ -157,7 +156,7 @@ class indexes_client_parser(HTMLParser):
             # @get_mail_addr() performs sanity check on its arguments
             self.id = get_mail_addr([msg_id])
             if not self.id or len(self.id) == 0:
-                raise NameError("Could not detect ID in email (there is no 'Message-Id' header) and "
+                raise NameError("Could not detect ID in 'Message-Id' header and "
                         "no ID has been provided via command line, exiting")
 
             t = mktime_tz(parsedate_tz(msg['Date']))
