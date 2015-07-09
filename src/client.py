@@ -130,6 +130,8 @@ class indexes_client_parser(HTMLParser):
         h = parse_header(msg['To'])
         feed_header(h)
 
+        msg_id = msg['Message-Id']
+
         if not self.id or len(self.id) == 0:
             self.id = get_id(h)
             if not self.id or len(self.id) == 0:
@@ -244,6 +246,9 @@ if __name__ == '__main__':
     parser.add_argument('--key', dest='key', action='store', default="",
             help='Key (if stored in elliptics) of the document used in indexing')
 
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
+            help='Do not normalize and index data, just parse and print processing messages (if enabled)')
+
     parser.add_argument('--email', dest='email', action='store_true', default=False,
             help='Provided document is an email and should be parsed accordingly')
 
@@ -279,7 +284,9 @@ if __name__ == '__main__':
             iparser.feed(args.file.read())
 
         print "id: %s" % (iparser.id)
-        iparser.index(args.index_url)
+
+        if not args.dry_run:
+            iparser.index(args.index_url)
     else:
         iparser.search(args.search_url, args.search, args.page_start, args.page_num)
 
