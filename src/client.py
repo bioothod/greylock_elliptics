@@ -8,19 +8,26 @@ import requests
 import sys
 
 from HTMLParser import HTMLParser
-from htmlentitydefs import name2codepoint
+
+from chardet.universaldetector import UniversalDetector
 
 from email.parser import Parser
-from email.utils import parseaddr
+from email.utils import parseaddr, parsedate_tz, mktime_tz
 
 class indexes_client_parser(HTMLParser):
-    def __init__(self, id, bucket, key):
+    def __init__(self, mailbox, id, bucket, key):
         HTMLParser.__init__(self)
+
+        self.detector = UniversalDetector()
 
         # if this ID lives in elliptics, bucket and key can be used to read the data
         self.id = id
         self.bucket = bucket
         self.key = key
+
+        # all indexes are related to given mailbox
+        # if it is None, 'To' address is used
+        self.mailbox = mailbox
 
         self.words = set()
 
@@ -28,6 +35,13 @@ class indexes_client_parser(HTMLParser):
         self.url = re.compile('(\w+)(\.\w+)+(:\d+)?(/+\w+)+')
         self.host = re.compile('(\w+)(\.\w+)+(:\d+)?')
         self.mail = re.compile('(\w+)([\.!\-_\+]\w+)*@(\w+)([\.!\-_\+]\w+)*')
+
+    def detect_encoding(self, text):
+        self.detector.reset()
+        self.detector.feed(text)
+        self.detector.close()
+
+        return self.detector.result['encoding']
 
     def set_encoding(self, enc):
         self.encoding = enc
@@ -39,22 +53,19 @@ class indexes_client_parser(HTMLParser):
             if charset:
                 enc = charset.input_codec
 
-        if enc:
-            self.set_encoding(enc)
-        else:
-            self.set_encoding('')
+        self.set_encoding(enc)
 
     def recode(self, text):
         enc = self.encoding
 
+        if not enc:
+            enc = self.detect_encoding(text)
+
         if enc == 'binary':
             return u''
 
-        if enc == 'unknown-8bit':
-            return text
-
-        if enc == '':
-            return text
+        if not enc or enc == 'unknown-8bit':
+            return unicode(text, errors='ignore')
 
         #print text.decode(enc), enc
         return unicode(text.decode(enc))
@@ -108,7 +119,7 @@ class indexes_client_parser(HTMLParser):
 
             return ret
 
-        def get_id(ret):
+        def get_mail_addr(ret):
             for r in ret:
                 addr = parseaddr(r)
                 if len(addr[1]) != 0:
@@ -120,6 +131,7 @@ class indexes_client_parser(HTMLParser):
 
         def feed_header(ret):
             for r in ret:
+                print "added: %s" % r
                 self.words.add(r)
 
         feed_header(parse_header(msg['Subject']))
@@ -127,16 +139,29 @@ class indexes_client_parser(HTMLParser):
         feed_header(parse_header(msg['Bcc']))
         feed_header(parse_header(msg['From']))
 
-        h = parse_header(msg['To'])
-        feed_header(h)
+        to_header = parse_header(msg['To'])
+        feed_header(to_header)
 
-        msg_id = msg['Message-Id']
+        # this address will be used to modify every index,
+        # i.e. this scripts only updates indexes which belong to given mailbox
+        if not self.mailbox:
+            self.mailbox = get_mail_addr(to_header)
+            if not self.mailbox:
+                raise NameError("No mailbox name has been provided: there is no 'To' header and nothing was provided via command line, exiting")
 
         if not self.id or len(self.id) == 0:
-            self.id = get_id(h)
+            msg_id = msg['Message-Id']
+            if not msg_id:
+                raise NameError("There is no 'Message-Id' header and no ID has been specified via command line, exiting")
+
+            # @get_mail_addr() performs sanity check on its arguments
+            self.id = get_mail_addr([msg_id])
             if not self.id or len(self.id) == 0:
-                raise NameError("Could not detect ID in email (there is no 'To' header) and "
+                raise NameError("Could not detect ID in email (there is no 'Message-Id' header) and "
                         "no ID has been provided via command line, exiting")
+
+            t = mktime_tz(parsedate_tz(msg['Date']))
+            self.id = str(t) + '.' + self.id
 
         def feed_check_multipart(msg):
             if not msg.is_multipart():
@@ -153,7 +178,7 @@ class indexes_client_parser(HTMLParser):
         raw = {}
         raw['text'] = ' '.join(tokens)
 
-        print raw['text']
+        #print raw['text']
         # this will be a unicode string
         js = json.dumps(raw, encoding='utf8', ensure_ascii=False)
 
@@ -169,8 +194,9 @@ class indexes_client_parser(HTMLParser):
 
         ret = r.json()
         for k, v in ret['keys'].items():
-            words.add(v)
-            print("%s -> %s" % (k, v))
+            mbox_idx = self.mailbox + u'.' + v
+            words.add(mbox_idx)
+            print("%s -> %s/%s" % (k, mbox_idx, v))
 
         return words
 
@@ -191,12 +217,10 @@ class indexes_client_parser(HTMLParser):
 
         # this will be a unicode string
         js = json.dumps(msg, encoding='utf8', ensure_ascii=False)
-        #print js.decode('unicode_internal').encode('utf8')
 
         headers = {}
         timeout = len(words) / 50 + 10
 
-        #print js.decode('unicode_internal').encode('utf8')
         r = requests.post(index_url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
         if r.status_code != requests.codes.ok:
             raise RuntimeError("Could not update indexes: url: %s, status: %d" % (index_url, r.status_code))
@@ -216,13 +240,12 @@ class indexes_client_parser(HTMLParser):
             s["indexes"].append(w)
 
         # this will be a unicode string
-        js = json.dumps(s, encoding='utf8', ensure_ascii=False)
+        js = json.dumps(s, ensure_ascii=False)
 
-        url = search_url
         headers = {}
         timeout = len(words) / 100 + 10
 
-        r = requests.post(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
+        r = requests.post(search_url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
         if r.status_code != requests.codes.ok:
             raise RuntimeError("Could not search for indexes: url: %s, status: %d" % (search_url, r.status_code))
 
@@ -245,6 +268,11 @@ if __name__ == '__main__':
             help='Bucket (if stored in elliptics) of the document used in indexing')
     parser.add_argument('--key', dest='key', action='store', default="",
             help='Key (if stored in elliptics) of the document used in indexing')
+
+    parser.add_argument('--mailbox', dest='mailbox', action='store',
+            help='All indexes are updated/searched in given mailbox only. ' +
+                'If not provided, \'To\' header is used for indexation. ' + 
+                'This option is required for search request.')
 
     parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
             help='Do not normalize and index data, just parse and print processing messages (if enabled)')
@@ -270,7 +298,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    iparser = indexes_client_parser(args.id, args.bucket, args.key)
+    iparser = indexes_client_parser(args.mailbox, args.id, args.bucket, args.key)
 
     if not args.search:
         if not args.email and not args.id:
@@ -288,5 +316,9 @@ if __name__ == '__main__':
         if not args.dry_run:
             iparser.index(args.index_url)
     else:
+        if not args.mailbox:
+            print("You must specify mailbox name to search in")
+            exit(-1)
+
         iparser.search(args.search_url, args.search, args.page_start, args.page_num)
 
