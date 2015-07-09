@@ -89,7 +89,18 @@ private:
 template <typename T>
 class locker {
 public:
-	locker(T *t, const std::string &key) : m_t(t), m_key(key) {}
+	locker(T *t, const std::string &key) : m_t(t), m_key(key) {
+	}
+	locker(const locker &other) {
+		m_key = other.m_key;
+		m_t = other.m_t;
+	}
+	locker(locker &&other) {
+		m_key = other.m_key;
+		m_t = other.m_t;
+	}
+	~locker() {
+	}
 
 	void lock() {
 		m_t->lock(m_key);
@@ -296,10 +307,15 @@ public:
 			indexes::intersect::intersector<indexes::bucket_transport> p(*(server()->bucket()));
 
 			std::vector<locker<http_server>> lockers;
+			// this reserve is absolutely needed, since elements of vector of unique locks
+			// use references to this array to grab locker's state
+			lockers.reserve(raw_indexes.size());
+
 			std::vector<std::unique_lock<locker<http_server>>> locks;
+			locks.reserve(raw_indexes.size());
 			for (auto it = raw_indexes.begin(), end = raw_indexes.end(); it != end; ++it) {
 				locker<http_server> l(server(), it->key);
-				lockers.emplace_back(l);
+				lockers.emplace_back(std::move(l));
 
 				std::unique_lock<locker<http_server>> lk(lockers.back());
 				locks.emplace_back(std::move(lk));
