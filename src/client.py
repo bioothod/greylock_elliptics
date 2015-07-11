@@ -306,7 +306,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--search', dest='search', action='store',
             help='Text to search (documents containg every token will be returned), '
-                'use \'attr:to:address@host.name\' to search for attributes (To,From,Cc,Bcc headers results in \'to\' and \'from\' attributes)')
+                'use \'attr:to:address@host.name\' to search for attributes (To,Cc,Bcc and From headers results in \'to\' and \'from\' attributes)')
     parser.add_argument('--page-num', dest='page_num', action='store', default=100,
             help='Maximum number of documents for given search request')
     parser.add_argument('--page-start', dest='page_start', action='store', default='',
