@@ -30,6 +30,7 @@ class indexes_client_parser(HTMLParser):
         self.mailbox = mailbox
 
         self.words = set()
+        self.attrs = set()
 
         self.encoding = ''
         self.url = re.compile('(\w+)(\.\w+)+(:\d+)?(/+\w+)+')
@@ -129,17 +130,23 @@ class indexes_client_parser(HTMLParser):
                         return m.group(1)
             return None
 
-        def feed_header(ret):
+        def feed_mail_addr(ret, prefix):
             for r in ret:
                 self.words.add(r)
+            addr = get_mail_addr(ret)
+            if addr:
+                self.attrs.add(prefix + ':' + addr)
 
-        feed_header(parse_header(msg['Subject']))
-        feed_header(parse_header(msg['Cc']))
-        feed_header(parse_header(msg['Bcc']))
-        feed_header(parse_header(msg['From']))
+
+        for r in parse_header(msg['Subject']):
+            self.words.add(r)
+
+        feed_mail_addr(parse_header(msg['Cc']), 'to')
+        feed_mail_addr(parse_header(msg['Bcc']), 'to')
+        feed_mail_addr(parse_header(msg['From']), 'from')
 
         to_header = parse_header(msg['To'])
-        feed_header(to_header)
+        feed_mail_addr(to_header, 'to')
 
         # this address will be used to modify every index,
         # i.e. this scripts only updates indexes which belong to given mailbox
@@ -173,6 +180,9 @@ class indexes_client_parser(HTMLParser):
 
         feed_check_multipart(msg)
 
+    def index_from_string(self, s):
+        return self.mailbox + '.' + s
+
     def normalize(self, normalize_url, tokens):
         raw = {}
         raw['text'] = ' '.join(tokens)
@@ -193,7 +203,7 @@ class indexes_client_parser(HTMLParser):
 
         ret = r.json()
         for k, v in ret['keys'].items():
-            mbox_idx = self.mailbox + u'.' + v
+            mbox_idx = self.index_from_string(v)
             words.add(mbox_idx)
             print("%s -> %s/%s" % (k, mbox_idx, v))
 
@@ -213,6 +223,10 @@ class indexes_client_parser(HTMLParser):
 
         for w in words:
             msg["indexes"].append(w)
+        for a in self.attrs:
+            aname = u'attr:' + self.index_from_string(a)
+            msg["indexes"].append(aname)
+            print("%s" % (aname))
 
         # this will be a unicode string
         js = json.dumps(msg, encoding='utf8', ensure_ascii=False)
@@ -226,8 +240,8 @@ class indexes_client_parser(HTMLParser):
 
         print "Index has been successfully updated for ID %s" % raw["id"]
 
-    def search(self, search_url, text, paging_start, paging_num):
-        words = self.normalize(args.normalize_url, [text])
+    def search(self, search_url, tokens, attrs, paging_start, paging_num):
+        words = self.normalize(args.normalize_url, tokens)
 
         s = {}
         p = {}
@@ -237,6 +251,10 @@ class indexes_client_parser(HTMLParser):
         s["indexes"] = []
         for w in words:
             s["indexes"].append(w)
+        for a in attrs:
+            aname = 'attr:' + self.index_from_string(a)
+            s['indexes'].append(aname)
+            print aname
 
         # this will be a unicode string
         js = json.dumps(s, ensure_ascii=False)
@@ -287,7 +305,8 @@ if __name__ == '__main__':
             help='URL used to search for data, for example: http://example.com/search')
 
     parser.add_argument('--search', dest='search', action='store',
-            help='Text to search (documents containg every token will be returned)')
+            help='Text to search (documents containg every token will be returned), '
+                'use \'attr:to:address@host.name\' to search for attributes (To,From,Cc,Bcc headers results in \'to\' and \'from\' attributes)')
     parser.add_argument('--page-num', dest='page_num', action='store', default=100,
             help='Maximum number of documents for given search request')
     parser.add_argument('--page-start', dest='page_start', action='store', default='',
@@ -319,5 +338,15 @@ if __name__ == '__main__':
             print("You must specify mailbox name to search in")
             exit(-1)
 
-        iparser.search(args.search_url, args.search, args.page_start, args.page_num)
+        attrs = []
+        tokens = []
+        for a in args.search.split():
+            if a.startswith('attr:'):
+                aname = a[5:]
+                if len(aname) > 0:
+                    attrs.append(aname)
+            else:
+                tokens.append(a)
+
+        iparser.search(args.search_url, tokens, attrs, args.page_start, args.page_num)
 
