@@ -108,7 +108,7 @@ class consul():
         logging.info("id: %s: broke lock: cas: %d", id, self.cas)
         return r.text == 'true'
 
-    def lock(self, id):
+    def raw_lock(self, id):
         if self.cas != 0:
             logging.error("id: %s: could not get lock: already locked, cas: %d", id, self.cas)
             return False
@@ -128,6 +128,17 @@ class consul():
 
         self.cas = self.get_cas(id)
         logging.info("id: %s: locked: cas: %d", id, self.cas)
+
+        return True
+
+    def lock(self, id):
+        while not self.raw_lock(id):
+            can = self.can_break_lock_set_cas(id)
+            if not can:
+                time.sleep(1)
+            else:
+                if self.break_lock(id, forced = True):
+                    break
 
         return True
 
