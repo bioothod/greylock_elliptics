@@ -15,18 +15,14 @@ from chardet.universaldetector import UniversalDetector
 from email.parser import Parser
 from email.utils import parseaddr, parsedate_tz, mktime_tz
 
-class indexes_client_parser(HTMLParser):
-    def __init__(self, mailbox, id, bucket, key, normalize_urls):
+class content_parser(HTMLParser):
+    def __init__(self, mailbox, id):
         HTMLParser.__init__(self)
 
         self.detector = UniversalDetector()
 
-        self.normalize_urls = normalize_urls
-
-        # if this ID lives in elliptics, bucket and key can be used to read the data
+        # if this ID lives in elliptics
         self.id = id
-        self.bucket = bucket
-        self.key = key
 
         # all indexes are related to given mailbox
         # if it is None, 'To' address is used
@@ -42,7 +38,6 @@ class indexes_client_parser(HTMLParser):
 
     def set_mailbox(self, mailbox):
         self.mailbox = mailbox
-        self.mailbox_hash = hash(mailbox) & 0xffffffff
 
     def detect_encoding(self, text):
         self.detector.reset()
@@ -187,18 +182,25 @@ class indexes_client_parser(HTMLParser):
 
         feed_check_multipart(msg)
 
+
+class search_machine():
+    def __init__(self, mailbox):
+        if not mailbox:
+            raise RuntimeError("Search machine must be initialized with valid mailbox, it can not be NULL")
+
+        self.mailbox = mailbox
+        self.mailbox_hash = hash(mailbox) & 0xffffffff
+
     def index_from_string(self, s):
         return self.mailbox + '.' + s
 
-    def normalize(self, tokens):
+    def normalize(self, url, words):
         raw = {}
-        raw['text'] = ' '.join(tokens)
+        raw['text'] = ' '.join(words)
 
         #print raw['text']
         # this will be a unicode string
         js = json.dumps(raw, encoding='utf8', ensure_ascii=False)
-
-        url = random.choice(self.normalize_urls)
 
         headers = {}
         timeout = len(js) / 1000 + 10
@@ -208,40 +210,28 @@ class indexes_client_parser(HTMLParser):
         if r.status_code != requests.codes.ok:
             raise RuntimeError("Could not normalize text: url: %s, status: %d" % (url, r.status_code))
 
-        words = set()
-
-        ret = r.json()
-        for k, v in ret['keys'].items():
-            mbox_idx = self.index_from_string(v)
-            words.add(mbox_idx)
-            print("%s -> %s/%s" % (k, mbox_idx, v))
-
-        return words
+        return r.json()['keys'].values()
 
     def get_url(self, urls):
         idx = self.mailbox_hash % len(urls)
         return urls[idx]
 
-    def index(self, index_urls):
-        words = self.normalize(self.words)
-
+    def index(self, url, words, attrs, id, bucket, key):
         raw = {}
-        raw["id"] = self.id
-        raw["bucket"] = self.bucket
-        raw["key"] = self.key
+        raw["id"] = id
+        raw["bucket"] = bucket
+        raw["key"] = key
 
         msg = {}
         msg["ids"] = [raw]
         msg["indexes"] = []
 
         for w in words:
-            msg["indexes"].append(w)
-        for a in self.attrs:
+            msg["indexes"].append(self.index_from_string(w))
+        for a in attrs:
             aname = u'attr:' + self.index_from_string(a)
             msg["indexes"].append(aname)
             print("%s" % (aname))
-
-        url = self.get_url(index_urls)
 
         # this will be a unicode string
         js = json.dumps(msg, encoding='utf8', ensure_ascii=False)
@@ -255,9 +245,11 @@ class indexes_client_parser(HTMLParser):
 
         print "Index has been successfully updated for ID %s" % raw["id"]
 
-    def search(self, search_urls, tokens, attrs, paging_start, paging_num):
-        words = self.normalize(tokens)
+    def index_multiple_urls(self, urls, words, attrs, id, bucket, key):
+        url = self.get_url(urls)
+        return self.index(url, words, attrs, id, bucket, key)
 
+    def search(self, url, words, attrs, paging_start, paging_num):
         s = {}
         p = {}
         p["num"] = paging_num
@@ -265,7 +257,7 @@ class indexes_client_parser(HTMLParser):
         s["paging"] = p
         s["indexes"] = []
         for w in words:
-            s["indexes"].append(w)
+            s["indexes"].append(self.index_from_string(w))
         for a in attrs:
             aname = 'attr:' + self.index_from_string(a)
             s['indexes'].append(aname)
@@ -273,8 +265,6 @@ class indexes_client_parser(HTMLParser):
 
         # this will be a unicode string
         js = json.dumps(s, ensure_ascii=False)
-
-        url = self.get_url(search_urls)
 
         headers = {}
         timeout = len(words) / 100 + 10
@@ -290,10 +280,14 @@ class indexes_client_parser(HTMLParser):
         for k in res["ids"]:
             print "bucket: '%s', key: '%s', id: '%s'" % (k["bucket"], k["key"], k["id"])
 
+    def search_multiple_urls(self, urls, words, attrs, paging_start, paging_num):
+        url = self.get_url(urls)
+        return self.search(url, words, attrs, paging_start, paging_num)
+
 
 if __name__ == '__main__':
     generic_parser = argparse.ArgumentParser(description='Generic arguments.', add_help=False)
-    generic_parser.add_argument('--file', dest='file', action='store', required=True, type=argparse.FileType('r'),
+    generic_parser.add_argument('--file', dest='file', action='store', type=argparse.FileType('r'),
             help='Input file to parse and index.')
     generic_parser.add_argument('--mailbox', dest='mailbox', action='store',
             help='All indexes are updated/searched in given mailbox only. ' +
@@ -339,37 +333,46 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    iparser = indexes_client_parser(args.mailbox, args.id, args.bucket, args.key, args.normalize_urls)
-
     if not args.search:
         if not args.email and not args.id:
             print("You must specify ID: it will be generated either from email (requires --email option), "
                     "or it must be provided via --id option")
             exit(-1)
 
+        p = content_parser(args.mailbox, args.id)
         if args.email:
-            iparser.feed_email(args.file)
+            p.feed_email(args.file)
         else:
-            iparser.feed(args.file.read())
+            p.feed(args.file.read())
 
-        print "id: %s" % (iparser.id)
+        print "id: %s, mailbox: %s" % (p.id, p.mailbox)
 
-        if not args.dry_run:
-            iparser.index(args.index_urls)
+        if args.dry_run:
+            exit(0)
+
+        sm = search_machine(p.mailbox)
+        url = random.choice(args.normalize_urls)
+        words = sm.normalize(url, p.words)
+        sm.index_multiple_urls(args.index_urls, words, p.attrs, p.id, args.bucket, args.key)
     else:
         if not args.mailbox:
             print("You must specify mailbox name to search in")
             exit(-1)
 
+        if args.dry_run:
+            exit(0)
+
         attrs = []
-        tokens = []
+        words = []
         for a in args.search.split():
             if a.startswith('attr:'):
                 aname = a[5:]
                 if len(aname) > 0:
                     attrs.append(aname)
             else:
-                tokens.append(a)
+                words.append(a)
 
-        iparser.search(args.search_urls, tokens, attrs, args.page_start, args.page_num)
-
+        sm = search_machine(args.mailbox)
+        url = random.choice(args.normalize_urls)
+        words = sm.normalize(url, words)
+        sm.search_multiple_urls(args.search_urls, words, attrs, args.page_start, args.page_num)
