@@ -141,8 +141,8 @@ if __name__ == '__main__':
             sm.index(index_url, words, p.attrs, p.id, args.bucket, args.key)
         except Exception as e:
             logging.error("index exception: url: %s, id: %s: %s", index_url, p.id, e)
-            c.unlock(p.mailbox)
-            exit(-1)
+
+        c.unlock(p.mailbox)
     else:
         if not args.mailbox:
             logging.error("You must specify mailbox name to search in")
@@ -173,5 +173,5 @@ if __name__ == '__main__':
             sm.search(search_url, words, attrs, args.page_start, args.page_num)
         except Exception as e:
             logging.error("search exception: url: %s: %s", search_url, e)
-            c.unlock(args.mailbox)
-            exit(-1)
+
+        c.unlock(args.mailbox)
