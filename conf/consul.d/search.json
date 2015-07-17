@@ -1,0 +1,11 @@
+{
+	"service": {
+		"name": "search",
+		"tags": ["search"],
+		"port": 8080,
+		"check": {
+			"script": "curl http://localhost:8080/ping >/dev/null 2>&1",
+			"interval": "10s"
+		}
+	}
+}

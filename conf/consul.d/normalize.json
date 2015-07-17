@@ -1,0 +1,11 @@
+{
+	"service": {
+		"name": "normalize",
+		"tags": ["normalize", "lang"],
+		"port": 1734,
+		"check": {
+			"script": "curl http://localhost:1734/ping >/dev/null 2>&1",
+			"interval": "10s"
+		}
+	}
+}
