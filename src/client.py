@@ -4,6 +4,7 @@
 import argparse
 import json
 import re
+import random
 import requests
 import sys
 
@@ -291,43 +292,48 @@ class indexes_client_parser(HTMLParser):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Elliptics indexing client.')
-    parser.add_argument('--file', dest='file', action='store', required=True, type=argparse.FileType('r'),
-            help='Input file to parse and index')
-
-    parser.add_argument('--id', dest='id', action='store',
-            help='ID of the document used in indexing')
-    parser.add_argument('--bucket', dest='bucket', action='store', default="",
-            help='Bucket (if stored in elliptics) of the document used in indexing')
-    parser.add_argument('--key', dest='key', action='store', default="",
-            help='Key (if stored in elliptics) of the document used in indexing')
-
-    parser.add_argument('--mailbox', dest='mailbox', action='store',
+    generic_parser = argparse.ArgumentParser(description='Generic arguments.', add_help=False)
+    generic_parser.add_argument('--file', dest='file', action='store', required=True, type=argparse.FileType('r'),
+            help='Input file to parse and index.')
+    generic_parser.add_argument('--mailbox', dest='mailbox', action='store',
             help='All indexes are updated/searched in given mailbox only. ' +
                 'If not provided, \'To\' header is used for indexation. ' + 
                 'This option is required for search request.')
 
-    parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
-            help='Do not normalize and index data, just parse and print processing messages (if enabled)')
 
-    parser.add_argument('--email', dest='email', action='store_true', default=False,
-            help='Provided document is an email and should be parsed accordingly')
-
-    parser.add_argument('--normalize-url', dest='normalize_urls', action='append', required=True,
+    direct_parser = argparse.ArgumentParser(description='Arguments, which must be specified if Consul autodiscovery is not used.', add_help=False)
+    direct_parser.add_argument('--normalize-url', dest='normalize_urls', action='append', required=True,
             help='URL used to normalize data, for example: http://example.com/normalize. Can be specified multiple times.')
-    parser.add_argument('--index-url', dest='index_urls', action='append',
+    direct_parser.add_argument('--index-url', dest='index_urls', action='append',
             help='URL used to index data, for example: http://example.com/index. Can be specified multiple times.')
-    parser.add_argument('--search-url', dest='search_urls', action='append',
+    direct_parser.add_argument('--search-url', dest='search_urls', action='append',
             help='URL used to search for data, for example: http://example.com/search. Can be specified multiple times.')
 
-    parser.add_argument('--search', dest='search', action='store',
+
+    index_parser = argparse.ArgumentParser(description='Index arguments.', add_help=False)
+    index_parser.add_argument('--id', dest='id', action='store',
+            help='ID of the document used in indexing.')
+    index_parser.add_argument('--bucket', dest='bucket', action='store', default="",
+            help='Bucket (if stored in elliptics) of the document used in indexing.')
+    index_parser.add_argument('--key', dest='key', action='store', default="",
+            help='Key (if stored in elliptics) of the document used in indexing.')
+    index_parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
+            help='Do not normalize and index data, just parse and print processing messages (if enabled).')
+    index_parser.add_argument('--email', dest='email', action='store_true', default=False,
+            help='Provided document is an email and should be parsed accordingly.')
+
+
+    search_parser = argparse.ArgumentParser(description='Search arguments.', add_help=False)
+    search_parser.add_argument('--search', dest='search', action='store',
             help='Text to search (documents containg every token will be returned), '
-                'use \'attr:to:address@host.name\' to search for attributes (To,Cc,Bcc and From headers results in \'to\' and \'from\' attributes)')
-    parser.add_argument('--page-num', dest='page_num', action='store', default=100,
-            help='Maximum number of documents for given search request')
-    parser.add_argument('--page-start', dest='page_start', action='store', default='',
+                'use \'attr:to:address@host.name\' to search for attributes (To,Cc,Bcc and From headers results in \'to\' and \'from\' attributes).')
+    search_parser.add_argument('--page-num', dest='page_num', action='store', default=100,
+            help='Maximum number of documents for given search request.')
+    search_parser.add_argument('--page-start', dest='page_start', action='store', default='',
             help='Start token for the second and higher search result pages ' +
-                 '(this token is returned by server and should be set for the next request)')
+                 '(this token is returned by server and should be set for the next request).')
+
+    parser = argparse.ArgumentParser(description='Elliptics indexing client.', parents=[generic_parser, direct_parser, index_parser, search_parser])
 
 
     args = parser.parse_args()
