@@ -333,7 +333,8 @@ if __name__ == '__main__':
             help='Start token for the second and higher search result pages ' +
                  '(this token is returned by server and should be set for the next request).')
 
-    parser = argparse.ArgumentParser(description='Elliptics indexing client.', parents=[generic_parser, direct_parser, index_parser, search_parser])
+    parser = argparse.ArgumentParser(description='Elliptics indexing client.',
+            parents=[generic_parser, direct_parser, index_parser, search_parser])
 
 
     args = parser.parse_args()
