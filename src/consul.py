@@ -20,7 +20,7 @@ class consul():
         self.cas = 0
         self.timeout = timeout
 
-    def get_url(self):
+    def get_kv_url(self):
         return random.choice(self.urls) + '/v1/kv'
 
     def message(self, id):
@@ -43,7 +43,7 @@ class consul():
 
     def get_lock_info(self, id):
         js = self.message(id)
-        url = "%s/%s" % (self.get_url(), id)
+        url = "%s/%s" % (self.get_kv_url(), id)
         headers = {}
 
         r = requests.get(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=self.timeout)
@@ -95,7 +95,7 @@ class consul():
         else:
             self.cas = self.get_cas(id)
 
-        url = "%s/%s?cas=%d" % (self.get_url(), id, self.cas)
+        url = "%s/%s?cas=%d" % (self.get_kv_url(), id, self.cas)
         js = self.message(id)
         headers = {}
 
@@ -118,7 +118,7 @@ class consul():
         # only allow to write this lock data if there is no other lock already being held
         self.cas = 0
 
-        url = "%s/%s?cas=%d" % (self.get_url(), id, self.cas)
+        url = "%s/%s?cas=%d" % (self.get_kv_url(), id, self.cas)
         headers = {}
 
         r = requests.put(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=self.timeout)
@@ -147,7 +147,7 @@ class consul():
             self.cas = self.get_cas(id)
 
         js = self.message(id)
-        url = "%s/%s?cas=%d" % (self.get_url(), id, self.cas)
+        url = "%s/%s?cas=%d" % (self.get_kv_url(), id, self.cas)
         headers = {}
 
         r = requests.put(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=self.timeout)
@@ -161,7 +161,7 @@ class consul():
         return True
 
     def unlock(self, id):
-        url = "%s/%s?cas=%d" % (self.get_url(), id, self.cas)
+        url = "%s/%s?cas=%d" % (self.get_kv_url(), id, self.cas)
         headers = {}
 
         r = requests.delete(url, headers=headers, timeout=self.timeout)
