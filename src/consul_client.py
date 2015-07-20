@@ -17,6 +17,19 @@ logging.basicConfig(filename1='/var/log/consul.log',
         level=logging.INFO)
 logging.getLogger().setLevel(logging.DEBUG)
 
+class service:
+    def __init__(self, id, name, addr, port):
+        self.id = id
+        self.name = name
+        self.addr = addr
+        self.port = port
+
+    def __repr__(self):
+        return '[id: %s, name: %s, addr: %s:%s]' % (self.id, self.name, self.addr, self.port)
+
+    def url(self):
+        return 'http://' + self.addr + ':' + str(self.port) + '/' + self.name
+
 class consul_discovery(consul.consul):
     def __init__(self, urls, timeout = 10):
         consul.consul.__init__(self, urls, timeout)
@@ -24,9 +37,47 @@ class consul_discovery(consul.consul):
         self.consul_urls = urls
         self.timeout = timeout
 
+        # cache critical services on startup
+        self.critical = self.get_critical_services()
+
     def get_random_consul_url(self):
         url = random.choice(self.consul_urls) + '/v1/catalog/service'
         return url
+
+    def service_from_json(self, e):
+        addr = e.get('ServiceAddress', e.get('Address'))
+        port = e.get('ServicePort')
+        sname = e.get('ServiceName')
+        id = e.get('ServiceID', sname)
+
+        return service(id, sname, addr, port)
+
+    def get_critical_services(self):
+        url = random.choice(self.consul_urls) + '/v1/health/state/critical'
+
+        r = requests.get(url, timeout=self.timeout)
+        if r.status_code != requests.codes.ok:
+            logging.error("id: %s: could not read info about critical services: message: %s, status: %d", id, r.text, r.status_code)
+            return None
+
+        critical = []
+        js = r.json()
+        for e in js:
+            s = self.service_from_json(e)
+            if s:
+                critical.append(s)
+
+        logging.info("get_critical_services: critical: %s", critical)
+        return critical
+
+    def check_critical(self, s, crit):
+        for c in crit:
+            if s.id == c.id:
+                return True
+            if s.addr == c.addr and s.port == c.port:
+                return True
+
+        return False
 
     def read(self, url):
         headers = {}
@@ -36,26 +87,24 @@ class consul_discovery(consul.consul):
             return False
 
         logging.info("%s: reply: %s", url, r.text)
-        addrs = []
+        services = []
         for e in r.json():
-            addr = e.get('Address')
-            port = e.get('ServicePort')
-            sname = e.get('ServiceName')
+            s = self.service_from_json(e)
+            if s:
+                if not self.check_critical(s, self.critical):
+                    services.append(s)
 
-            if addr and port and sname:
-                addrs.append('http://' + addr + ':' + str(port) + '/' + sname)
+        return services
 
-        return addrs
-
-    def get_index_urls(self):
+    def get_index_services(self):
         url = self.get_random_consul_url() + '/index'
         return self.read(url)
 
-    def get_normalize_urls(self):
+    def get_normalize_services(self):
         url = self.get_random_consul_url() + '/normalize'
         return self.read(url)
 
-    def get_search_urls(self):
+    def get_search_services(self):
         # search service is the same as index
         url = self.get_random_consul_url() + '/search'
         return self.read(url)
@@ -131,10 +180,20 @@ if __name__ == '__main__':
 
         sm = search_machine(p.mailbox)
 
-        normalize_url = random.choice(c.get_normalize_urls())
-        words = sm.normalize(normalize_url, p.words)
+        normalize_services = c.get_normalize_services()
+        if len(normalize_services) == 0:
+            logging.error("There are no normalize services available, exiting.")
+            exit(-1)
 
-        index_url = random.choice(c.get_index_urls())
+        url = random.choice(normalize_services).url()
+        words = sm.normalize(url, p.words)
+
+        index_services = c.get_index_services()
+        if len(index_services) == 0:
+            logging.error("There are no index services available, exiting.")
+            exit(-1)
+
+        index_url = random.choice(index_services).url()
 
         c.lock(p.mailbox)
         try:
@@ -163,10 +222,20 @@ if __name__ == '__main__':
 
         sm = search_machine(args.mailbox)
 
-        normalize_url = random.choice(c.get_normalize_urls())
-        words = sm.normalize(normalize_url, words)
+        normalize_services = c.get_normalize_services()
+        if len(normalize_services) == 0:
+            logging.error("There are no normalize services available, exiting.")
+            exit(-1)
 
-        search_url = random.choice(c.get_search_urls())
+        url = random.choice(normalize_services).url()
+        words = sm.normalize(url, words)
+
+        search_services = c.get_search_services()
+        if len(search_services) == 0:
+            logging.error("There are no search services available, exiting.")
+            exit(-1)
+
+        search_url = random.choice(search_services).url()
 
         c.lock(args.mailbox)
         try:
