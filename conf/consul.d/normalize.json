@@ -1,7 +1,9 @@
 {
 	"service": {
+		"id": "normalize.odin.0",
 		"name": "normalize",
 		"tags": ["normalize", "lang"],
+		"address": "127.0.0.1",
 		"port": 1734,
 		"check": {
 			"script": "curl http://localhost:1734/ping >/dev/null 2>&1",

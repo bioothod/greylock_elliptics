@@ -1,7 +1,9 @@
 {
 	"service": {
+		"id": "index.odin.0",
 		"name": "index",
 		"tags": ["index"],
+		"address": "127.0.0.1",
 		"port": 8080,
 		"check": {
 			"script": "curl http://localhost:8080/ping >/dev/null 2>&1",
