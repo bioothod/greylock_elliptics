@@ -1,6 +1,7 @@
 #ifndef __INDEXES_BUCKET_HPP
 #define __INDEXES_BUCKET_HPP
 
+#include "indexes/elliptics_stat.hpp"
 #include "indexes/error.hpp"
 
 #include <elliptics/session.hpp>
@@ -8,6 +9,7 @@
 #include <msgpack.hpp>
 
 #include <condition_variable>
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -81,6 +83,10 @@ struct bucket_meta {
 	bucket_meta() {
 		memset(reserved, 0, sizeof(reserved));
 	}
+};
+
+struct bucket_stat {
+	std::map<int, backend_stat>	backends;
 };
 
 class raw_bucket {
@@ -217,6 +223,16 @@ public:
 		return ret;
 	}
 
+	bucket_meta meta() {
+		std::lock_guard<std::mutex> guard(m_lock);
+		return m_meta;
+	}
+
+	void set_backend_stat(int group, const backend_stat &bs) {
+		std::lock_guard<std::mutex> guard(m_lock);
+		m_stat.backends[group] = bs;
+	}
+
 private:
 	std::shared_ptr<elliptics::node> m_node;
 	std::vector<int> m_meta_groups;
@@ -228,6 +244,8 @@ private:
 
 	std::mutex m_lock;
 	bucket_meta m_meta;
+
+	bucket_stat m_stat;
 
 	status invalid_status() {
 		status st;
@@ -300,10 +318,23 @@ static inline bucket make_bucket(std::shared_ptr<elliptics::node> &node, const s
 
 class bucket_processor {
 public:
-	bucket_processor(std::shared_ptr<elliptics::node> &node) : m_node(node) {}
+	bucket_processor(std::shared_ptr<elliptics::node> &node) :
+	m_node(node),
+	m_stat(node)
+	{
+	}
+
+	virtual ~bucket_processor() {
+		m_need_exit = true;
+		m_wait.notify_all();
+		if (m_buckets_update.joinable())
+			m_buckets_update.join();
+	}
 
 	bool init(const std::vector<int> &mgroups, const std::vector<std::string> &bnames) {
 		std::map<std::string, bucket> buckets = read_buckets(mgroups, bnames);
+
+		m_buckets_update =  std::thread(std::bind(&bucket_processor::buckets_update, this));
 
 		std::unique_lock<std::mutex> lock(m_lock);
 
@@ -401,6 +432,12 @@ private:
 	std::vector<std::string> m_bnames;
 	std::map<std::string, bucket> m_buckets;
 
+	bool m_need_exit = false;
+	std::condition_variable m_wait;
+	std::thread m_buckets_update;
+
+	elliptics_stat m_stat;
+
 	bucket find_bucket(const std::string &bname) {
 		std::lock_guard<std::mutex> lock(m_lock);
 		auto it = m_buckets.find(bname);
@@ -417,15 +454,41 @@ private:
 		for (auto it = bnames.begin(), end = bnames.end(); it != end; ++it) {
 			buckets[*it] = make_bucket(m_node, mgroups, *it);
 		}
+		m_stat.schedule_update_and_wait();
 
 		elliptics::logger &log = m_node->get_log();
 		for (auto it = buckets.begin(), end = buckets.end(); it != end; ++it) {
 			it->second->wait_for_reload();
 
-			BH_LOG(log, DNET_LOG_INFO, "read_buckets: bucket: %s: reloaded, valid: %d", it->first.c_str(), it->second->valid());
+			if (it->second->valid()) {
+				bucket_meta meta = it->second->meta();
+				for (auto g = meta.groups.begin(), gend = meta.groups.end(); g != gend; ++g) {
+					backend_stat bs = m_stat.stat(*g);
+					if (bs.group == *g) {
+						it->second->set_backend_stat(*g, bs);
+					}
+				}
+			}
+
+			BH_LOG(log, DNET_LOG_INFO, "read_buckets: bucket: %s: reloaded, valid: %d",
+					it->first.c_str(), it->second->valid());
 		}
 
 		return buckets;
+	}
+
+	void buckets_update() {
+		while (!m_need_exit) {
+			std::unique_lock<std::mutex> guard(m_lock);
+			if (m_wait.wait_for(guard, std::chrono::seconds(30), [&] {return m_need_exit;}))
+				break;
+			guard.unlock();
+
+			std::map<std::string, bucket> buckets = read_buckets(m_meta_groups, m_bnames);
+
+			guard.lock();
+			m_buckets = buckets;
+		}
 	}
 };
 
