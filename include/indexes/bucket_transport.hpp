@@ -9,6 +9,8 @@
 
 namespace ioremap { namespace indexes {
 
+// this transport spreads all write load among set of buckets available in bucket_processor
+// main function which 'shards' data among internal buckets is @get_bucket() - it returns name of the bucket to write data into
 class bucket_transport : public indexes::bucket_processor {
 public:
 	bucket_transport(std::shared_ptr<elliptics::node> node) : bucket_processor(node) {}

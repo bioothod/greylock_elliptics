@@ -74,6 +74,17 @@ static inline bool get_bool(const rapidjson::Value &entry, const char *name, boo
 	return def;
 }
 
+// weight calculation limits
+//
+// Metric in question is not allowed to be less than @hard limit and
+// preferably should not be less than @soft limit
+struct limits {
+	struct {
+		float soft = 0.2;
+		float hard = 0.1;
+	} size;
+};
+
 struct backend_stat {
 	backend_stat() {}
 	backend_stat(struct dnet_addr *_addr) : addr(_addr) {}

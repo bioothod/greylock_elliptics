@@ -127,6 +127,10 @@ public:
 		return m_valid;
 	}
 
+	std::string name() const {
+		return m_meta.name;
+	}
+
 	status read(const std::string &key) {
 		if (!m_valid) {
 			return invalid_status();
@@ -233,6 +237,48 @@ public:
 		m_stat.backends[group] = bs;
 	}
 
+	// weight is a value in (0,1) range,
+	// the closer to 1, the more likely this bucket will be selected
+	float weight(uint64_t size, const limits &l) {
+		std::lock_guard<std::mutex> guard(m_lock);
+
+		// we select backend with the smallest amount of space available
+		// any other space metric may end up with the situation when we will
+		// write data to backend where there is no space
+		float size_weight = 0;
+		for (auto st = m_stat.backends.begin(), end = m_stat.backends.end(); st != end; ++st) {
+			const backend_stat &bs = st->second;
+			float tmp = bs.size.limit - bs.size.used;
+
+			// there is no space at least in one backend for given size in this bucket
+			if (tmp < size) {
+				return 0;
+			}
+
+			tmp /= (float)(bs.size.limit);
+
+			// size is less than hard limit - this backend doesn't have enough space for given request
+			if (tmp < l.size.hard) {
+				return 0;
+			}
+
+			// heavily deacrease weight of this backend (and thus bucket)
+			// if amount of free space is less than soft limit
+			if (tmp < l.size.soft) {
+				tmp /= 10;
+			}
+
+			if (tmp < size_weight || size_weight == 0)
+				size_weight = tmp;
+		}
+
+		// so far only size metric is supported
+		// TODO next step is to add network/disk performance metric
+		// TODO we have to measure upload time and modify weight
+		// TODO accordingly to the time it took to write data
+		return size_weight;
+	}
+
 private:
 	std::shared_ptr<elliptics::node> m_node;
 	std::vector<int> m_meta_groups;
@@ -316,6 +362,31 @@ static inline bucket make_bucket(std::shared_ptr<elliptics::node> &node, const s
 	return std::make_shared<raw_bucket>(node, mgroups, name);
 }
 
+// This class implements main distribution logic.
+// There are multiple @bucket objects in the processor,
+// each bucket corresponds to logical entity which handles replication
+// and optionally additional internal write load balancing.
+//
+// Basically saying, @bucket is an entity which holds your data and
+// checks whether it is good or not.
+//
+// Thus, after you data has been written into given bucket, you can only
+// read it from that bucket and update it only in that bucket. If you write
+// data with the same key into different bucket, that will be a completely different object,
+// objects with the same name in different buckets will not be related in any way.
+//
+// When you do not have (do not even know) about which bucket to use, there is a helper method @get_bucket()
+// It will select bucket which suits your needs better than others. Selection logic taks into consideration
+// space measurements and various performance metrics (implicit disk and network for instance).
+// Selection is probabilistic in nature, thus it is possible that you will not get the best match,
+// this probability obeys normal distribution law and decays quickly.
+//
+// It is only possible to read data from some bucket (where you had written it), not from the storage.
+// There is internal per-bucket load balancing for read requests - elliptics maintains internal states
+// for all connections and groups (replicas within bucket) and their weights, which correspond to how
+// quickly one can read object from given destination point. When reading data from bucket, it selects
+// the fastest desistnation point among its replicas and reads data from that point. If data is not available,
+// elliptics will automatically fetch (data recover) data from other copies.
 class bucket_processor {
 public:
 	bucket_processor(std::shared_ptr<elliptics::node> &node) :
@@ -348,28 +419,74 @@ public:
 		return true;
 	}
 
+	// returns bucket name in @data or negative error code in @error
 	status get_bucket(size_t size) {
 		status st;
 
-		std::vector<std::string> good_buckets;
+		std::map<float, bucket> good_buckets;
+		std::map<float, bucket> really_good_buckets;
 
-		std::lock_guard<std::mutex> lock(m_lock);
+		std::unique_lock<std::mutex> guard(m_lock);
 		if (m_buckets.size() == 0) {
 			st.error = -ENODEV;
-			st.message = "there are no suitable buckets for size " + elliptics::lexical_cast(size);
+			st.message = "there are no buckets at all";
 
 			return st;
 		}
 
+		limits l;
+
+		float sum = 0;
+		float really_good_sum = 0;
 		for (auto it = m_buckets.begin(), end = m_buckets.end(); it != end; ++it) {
-			if (it->second->valid()) {
-				good_buckets.push_back(it->first);
+			if (!it->second->valid()) {
+				float w = it->second->weight(size, l);
+
+				// skip buckets with zero weights
+				// usually this means that there is no free space for this request
+				// or stats are broken (timed out)
+				if (w <= 0)
+					continue;
+
+				good_buckets[w] = it->second;
+				sum += w;
+
+				if (w > 0.5) {
+					really_good_buckets[w] = it->second;
+					really_good_sum += w;
+				}
 			}
 		}
 
-		size_t idx = rand() % good_buckets.size(); // we do not really care about true randomness here
+		guard.unlock();
 
-		st.data = elliptics::data_pointer::copy(good_buckets[idx]);
+		// use really good buckets if we have them
+		if (really_good_sum > 0) {
+			sum = really_good_sum;
+			good_buckets.swap(really_good_buckets);
+		}
+
+		if (m_buckets.size() == 0) {
+			st.error = -ENODEV;
+			st.message = "there are buckets, but they are not suitable for size " + elliptics::lexical_cast(size);
+
+			return st;
+		}
+
+		// randomly select value in a range [0, sum+1)
+		// then iterate over all good buckets starting from the one with the highest weight
+		//
+		// the higher the weight, the more likely this bucket will be selected
+		float rnd = (0 + (rand() % (int)(sum * 10 - 0 + 1))) / 10.0;
+
+		for (auto it = good_buckets.rbegin(), end = good_buckets.rend(); it != end; ++it) {
+			rnd -= it->first;
+			if (rnd <= 0) {
+				st.data = elliptics::data_pointer::copy(it->second->name());
+				break;
+			}
+		}
+
 		return st;
 	}
 
