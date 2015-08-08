@@ -455,6 +455,7 @@ int main(int argc, char *argv[])
 	if (bnames.size() != 0) {
 		indexes::bucket_transport bt(t.get_node());
 		bt.init(elliptics::parse_groups(groups.c_str()), bnames);
+		bt.test();
 
 		test<indexes::bucket_transport> tt(bt, bnames[0]);
 	} else {
