@@ -87,9 +87,9 @@ struct limits {
 
 struct backend_stat {
 	backend_stat() {}
-	backend_stat(struct dnet_addr *_addr) : addr(_addr) {}
+	backend_stat(struct dnet_addr *_addr) : addr(*_addr) {}
 
-	struct dnet_addr *addr = NULL;
+	struct dnet_addr	addr;
 
 	int		backend_id = -1;
 	int		group = -1;
@@ -119,11 +119,11 @@ struct backend_stat {
 	std::string str() const {
 		char tmp[1024];
 		snprintf(tmp, sizeof(tmp), "addr: %s, backend_id: %d, group: %d, "
-			"state: %d, defrag_state: %d, ro: %d, start_error: %d"
+			"state: %d, defrag_state: %d, ro: %d, start_error: %d, "
 			"size: limit: %llu, used: %llu, removed: %llu, "
 			"can_be_written: %llu, can_be_written_plus_removed: %llu, "
 			"records: total: %llu, removed: %llu, corrupted: %llu",
-				dnet_addr_string(addr), backend_id, group,
+				dnet_addr_string(&addr), backend_id, group,
 				state, defrag_state, ro, start_error,
 				(unsigned long long)size.limit, (unsigned long long)size.used, (unsigned long long)size.removed,
 				(unsigned long long)(size.limit - size.used),
@@ -143,7 +143,7 @@ struct backend_stat {
 		BH_LOG(log, DNET_LOG_NOTICE,
 			"stat: fill_status: addr: %s, backend_id: %d, "
 			"state: %d, defrag_state: %d, ro: %d, start_error: %d",
-				dnet_addr_string(addr), backend_id, state, defrag_state, ro, start_error);
+				dnet_addr_string(&addr), backend_id, state, defrag_state, ro, start_error);
 
 	}
 
@@ -160,7 +160,7 @@ struct backend_stat {
 		if (!summary.IsObject()) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'summary_stats' object",
-					dnet_addr_string(addr), backend_id);
+					dnet_addr_string(&addr), backend_id);
 			return;
 		}
 
@@ -168,7 +168,7 @@ struct backend_stat {
 		if (!config.IsObject()) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'config' object",
-					dnet_addr_string(addr), backend_id);
+					dnet_addr_string(&addr), backend_id);
 			return;
 		}
 		uint64_t config_flags = get_int64(config, "blob_flags");
@@ -177,7 +177,7 @@ struct backend_stat {
 		if (group < 0) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'group' field",
-					dnet_addr_string(addr), backend_id);
+					dnet_addr_string(&addr), backend_id);
 			return;
 		}
 
@@ -185,7 +185,7 @@ struct backend_stat {
 		if (!vstat.IsObject()) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'vfs' object",
-					dnet_addr_string(addr), backend_id);
+					dnet_addr_string(&addr), backend_id);
 			return;
 		}
 
