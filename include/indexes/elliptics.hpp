@@ -19,6 +19,10 @@ public:
 		return m_node;
 	}
 
+	const elliptics::logger &logger() const {
+		return m_node->get_log();
+	}
+
 	void add_remotes(const std::vector<std::string> &remotes) {
 		std::vector<elliptics::address> a(remotes.begin(), remotes.end());
 		m_node->add_remote(a);
