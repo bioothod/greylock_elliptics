@@ -437,6 +437,10 @@ public:
 		return true;
 	}
 
+	const elliptics::logger &logger() const {
+		return m_node->get_log();
+	}
+
 	// run self test, raise exception if there are problems
 	//
 	// Tests:
@@ -541,10 +545,8 @@ public:
 
 	// returns bucket name in @data or negative error code in @error
 	status get_bucket(size_t size) {
+		elliptics::logger &log = m_node->get_log();
 		status st;
-
-		std::map<float, bucket> good_buckets;
-		std::map<float, bucket> really_good_buckets;
 
 		std::unique_lock<std::mutex> guard(m_lock);
 		if (m_buckets.size() == 0) {
@@ -554,37 +556,23 @@ public:
 			return st;
 		}
 
-		limits l;
+		struct bw {
+			bucket		b;
+			float		w = 0;
+		};
 
-		float sum = 0;
-		float really_good_sum = 0;
+		std::vector<bw> good_buckets;
+		good_buckets.reserve(m_buckets.size());
+
 		for (auto it = m_buckets.begin(), end = m_buckets.end(); it != end; ++it) {
 			if (it->second->valid()) {
-				float w = it->second->weight(size, l);
-
-				// skip buckets with zero weights
-				// usually this means that there is no free space for this request
-				// or stats are broken (timed out)
-				if (w <= 0)
-					continue;
-
-				good_buckets[w] = it->second;
-				sum += w;
-
-				if (w > 0.5) {
-					really_good_buckets[w] = it->second;
-					really_good_sum += w;
-				}
+				bw b;
+				b.b = it->second;
+				good_buckets.push_back(b);
 			}
 		}
 
 		guard.unlock();
-
-		// use really good buckets if we have them
-		if (really_good_sum > 0) {
-			sum = really_good_sum;
-			good_buckets.swap(really_good_buckets);
-		}
 
 		if (good_buckets.size() == 0) {
 			st.error = -ENODEV;
@@ -593,16 +581,37 @@ public:
 			return st;
 		}
 
+		limits l;
+		float sum = 0;
+		for (auto it = good_buckets.rbegin(), end = good_buckets.rend(); it != end; ++it) {
+			// weight calculation is a rather heavy task, cache this value
+			it->w = it->b->weight(1, l);
+			sum += it->w;
+		}
+
+		struct {
+			// reverse sort - from higher to lower weights
+			bool operator()(const bw &b1, const bw &b2) {
+				return b1.w > b2.w;
+			}
+		} cmp;
+		std::sort(good_buckets.begin(), good_buckets.end(), cmp);
+
 		// randomly select value in a range [0, sum+1)
 		// then iterate over all good buckets starting from the one with the highest weight
 		//
 		// the higher the weight, the more likely this bucket will be selected
 		float rnd = (0 + (rand() % (int)(sum * 10 - 0 + 1))) / 10.0;
 
+		BH_LOG(log, DNET_LOG_NOTICE, "test: weight selection: good-buckets: %d, rnd: %f, sum: %f",
+				good_buckets.size(), rnd, sum);
+
 		for (auto it = good_buckets.rbegin(), end = good_buckets.rend(); it != end; ++it) {
-			rnd -= it->first;
+			BH_LOG(log, DNET_LOG_NOTICE, "test: weight comparison: bucket: %s, sum: %f, rnd: %f, weight: %f",
+					it->b->name().c_str(), sum, rnd, it->w);
+			rnd -= it->w;
 			if (rnd <= 0) {
-				st.data = elliptics::data_pointer::copy(it->second->name());
+				st.data = elliptics::data_pointer::copy(it->b->name());
 				break;
 			}
 		}
