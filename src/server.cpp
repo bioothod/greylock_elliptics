@@ -420,6 +420,10 @@ public:
 						this->send_reply(swarm::http_response::internal_server_error);
 						return;
 					}
+
+					ILOG_INFO("url: %s, index: %s, key: %s: inserted new key",
+						req.url().to_human_readable().c_str(), start.str().c_str(),
+						it->str().c_str());
 				}
 			}
 
