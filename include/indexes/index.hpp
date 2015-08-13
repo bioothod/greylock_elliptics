@@ -3,9 +3,21 @@
 
 #include "indexes/page.hpp"
 
+#include <blackhole/blackhole.hpp>
+
 #include <map>
 
+#define INDEXES_LOG_ERROR blackhole::defaults::severity::error
+#define INDEXES_LOG_WARNING blackhole::defaults::severity::warning
+#define INDEXES_LOG_INFO blackhole::defaults::severity::info
+#define INDEXES_LOG_NOTICE blackhole::defaults::severity::notice
+#define INDEXES_LOG_DEBUG blackhole::defaults::severity::debug
+
 namespace ioremap { namespace indexes {
+
+typedef blackhole::defaults::severity log_level;
+typedef blackhole::verbose_logger_t<log_level> logger_base;
+typedef blackhole::wrapper_t<logger_base> logger;
 
 struct index_meta {
 	uint64_t page_index = 0;
@@ -46,7 +58,7 @@ struct remove_recursion {
 template <typename T>
 class index {
 public:
-	index(T &t, const eurl &sk): m_t(t), m_sk(sk) {
+	index(T &t, const eurl &sk): m_t(t), m_log(t.logger()), m_sk(sk) {
 		std::vector<status> meta = m_t.read_all(meta_key());
 
 		struct separate_index_meta {
@@ -111,7 +123,8 @@ public:
 
 		size_t pages_recovered = 0;
 		for (auto it = page_begin(), end = page_end(); it != end; ++it) {
-			dprintf("page: %s: %s -> %s\n", it.url().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: page: %s: %s -> %s",
+				it.url().str().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
 
 			std::vector<status> wr = m_t.write(recovery_groups, it.url(), it->save(), default_reserve_size, false);
 			
@@ -132,7 +145,7 @@ public:
 		m_t.set_groups(good_groups);
 
 		meta_write();
-		printf("index: opened: page_index: %ld, groups: %s, pages recovered: %zd\n",
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: opened: page_index: %ld, groups: %s, pages recovered: %zd",
 				m_meta.page_index, print_groups(good_groups).c_str(), pages_recovered);
 	}
 
@@ -236,6 +249,7 @@ public:
 
 private:
 	T &m_t;
+	const logger &m_log;
 	eurl m_sk;
 
 	index_meta m_meta;
@@ -271,7 +285,7 @@ private:
 
 		int found_pos = p.search_node(obj);
 		if (found_pos < 0) {
-			dprintf("search: %s: page: %s -> %s, found_pos: %d\n",
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: search: %s: page: %s -> %s, found_pos: %d",
 				obj.str().c_str(),
 				page_key.str().c_str(), p.str().c_str(),
 				found_pos);
@@ -279,7 +293,7 @@ private:
 			return std::make_pair(p, found_pos);
 		}
 
-		dprintf("search: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: search: %s: page: %s -> %s, found_pos: %d, found_key: %s",
 			obj.str().c_str(),
 			page_key.str().c_str(), p.str().c_str(),
 			found_pos, p.objects[found_pos].str().c_str());
@@ -304,12 +318,13 @@ private:
 
 		page split;
 
-		dprintf("insert: %s: page: %s -> %s\n", obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: page: %s -> %s",
+			obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
 
 		if (!p.is_leaf()) {
 			int found_pos = p.search_node(obj);
 			if (found_pos < 0) {
-				dprintf("insert: %s: page: %s -> %s, found_pos: %d\n",
+				BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: page: %s -> %s, found_pos: %d",
 					obj.str().c_str(),
 					page_key.str().c_str(), p.str().c_str(),
 					found_pos);
@@ -337,7 +352,7 @@ private:
 				if (err)
 					return err;
 
-				dprintf("insert: %s: page: %s -> %s, leaf: %s -> %s\n",
+				BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: page: %s -> %s, leaf: %s -> %s",
 						obj.str().c_str(),
 						page_key.str().c_str(), p.str().c_str(),
 						leaf_key.str().c_str(), leaf.str().c_str());
@@ -349,27 +364,27 @@ private:
 
 			key &found = p.objects[found_pos];
 
-			dprintf("insert: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: page: %s -> %s, found_pos: %d, found_key: %s",
 				obj.str().c_str(),
 				page_key.str().c_str(), p.str().c_str(),
 				found_pos, found.str().c_str());
 
 			insert(found.url, obj, rec);
 
-			dprintf("insert: %s: returned: %s -> %s, found_pos: %d, found_key: %s, rec: page_start: %s, split_key: %s\n",
-					obj.str().c_str(),
-					page_key.str().c_str(), p.str().c_str(),
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: returned: %s -> %s, "
+					"found_pos: %d, found_key: %s, "
+					"rec: page_start: %s, split_key: %s",
+					obj.str().c_str(), page_key.str().c_str(), p.str().c_str(),
 					found_pos, found.str().c_str(),
-					rec.page_start.str().c_str(),
-					rec.split_key.str().c_str());
+					rec.page_start.str().c_str(), rec.split_key.str().c_str());
 
 			// true if we should not unwind recursion and just return
 			// false if either split page has to be written or page changed and has to be written
 			bool want_return = true;
 
 			if (found != rec.page_start) {
-				dprintf("p: %s: replace: key: %s: id: %s -> %s\n",
-						p.str().c_str(), found.str().c_str(), found.id.c_str(), rec.page_start.id.c_str());
+				BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: p: %s: replace: key: %s: id: %s -> %s",
+					p.str().c_str(), found.str().c_str(), found.id.c_str(), rec.page_start.id.c_str());
 				found.id = rec.page_start.id;
 
 				// page has changed, it must be written into storage
@@ -404,7 +419,7 @@ private:
 			split.next = p.next;
 			p.next = rec.split_key.url;
 
-			dprintf("insert: %s: write split page: %s -> %s, split: key: %s -> %s\n",
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: write split page: %s -> %s, split: key: %s -> %s",
 					obj.str().c_str(),
 					page_key.str().c_str(), p.str().c_str(),
 					rec.split_key.str().c_str(), split.str().c_str());
@@ -445,12 +460,14 @@ private:
 
 			m_meta.num_pages++;
 
-			dprintf("insert: %s: write split page: %s -> %s, old_root_key: %s, new_root: %s\n",
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: write split page: %s -> %s, "
+					"old_root_key: %s, new_root: %s",
 					obj.str().c_str(),
 					page_key.str().c_str(), p.str().c_str(),
 					old_root_key.str().c_str(), new_root.str().c_str());
 		} else {
-			dprintf("insert: %s: write main page: %s -> %s\n", obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: %s: write main page: %s -> %s",
+				obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
 			err = check(m_t.write(page_key, p.save(), true));
 		}
 
@@ -469,11 +486,12 @@ private:
 		page p;
 		p.load(e.data.data(), e.data.size());
 
-		dprintf("remove: %s: page: %s -> %s\n", obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: page: %s -> %s",
+				obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
 
 		int found_pos = p.search_node(obj);
 		if (found_pos < 0) {
-			dprintf("remove: %s: page: %s -> %s, found_pos: %d\n",
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: page: %s -> %s, found_pos: %d",
 				obj.str().c_str(),
 				page_key.str().c_str(), p.str().c_str(),
 				found_pos);
@@ -483,7 +501,7 @@ private:
 
 		key &found = p.objects[found_pos];
 
-		dprintf("remove: %s: page: %s -> %s, found_pos: %d, found_key: %s\n",
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: page: %s -> %s, found_pos: %d, found_key: %s",
 			obj.str().c_str(),
 			page_key.str().c_str(), p.str().c_str(),
 			found_pos, found.str().c_str());
@@ -503,7 +521,7 @@ private:
 			found.id = rec.page_start.id;
 		}
 
-		dprintf("remove: %s: returned: %s -> %s, found_pos: %d, found_key: %s\n",
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: returned: %s -> %s, found_pos: %d, found_key: %s",
 				obj.str().c_str(),
 				page_key.str().c_str(), p.str().c_str(),
 				found_pos, found.str().c_str());
@@ -539,10 +557,16 @@ private:
 
 	eurl generate_page_url() {
 		status st = m_t.get_bucket(default_reserve_size);
+		if (st.error < 0) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: generate_page_url: could not get bucket, "
+				"generated page URL will not be valid: %s [%d]",
+					st.message, st.error);
+		}
+
 		eurl ret;
 		ret.bucket = st.data.to_string();
 		ret.key = m_sk.key + "." + elliptics::lexical_cast(m_meta.page_index);
-		dprintf("generated key: %s\n", ret.str().c_str());
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key: %s", ret.str().c_str());
 		m_meta.page_index++;
 		return ret;
 	}
