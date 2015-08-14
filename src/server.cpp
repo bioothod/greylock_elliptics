@@ -1,8 +1,8 @@
-#include "indexes/bucket.hpp"
-#include "indexes/bucket_transport.hpp"
-#include "indexes/core.hpp"
-#include "indexes/index.hpp"
-#include "indexes/intersection.hpp"
+#include "greylock/bucket.hpp"
+#include "greylock/bucket_transport.hpp"
+#include "greylock/core.hpp"
+#include "greylock/index.hpp"
+#include "greylock/intersection.hpp"
 
 
 #include <elliptics/session.hpp>
@@ -170,7 +170,7 @@ public:
 		if (!elliptics_init(config))
 			return false;
 
-		if (!indexes_init(config))
+		if (!greylock_init(config))
 			return false;
 
 		on<on_ping>(
@@ -210,16 +210,16 @@ public:
 			rapidjson::Document doc;
 			doc.Parse<0>(data.c_str());
 
-			if (!doc.HasMember("indexes")) {
-				ILOG_ERROR("url: %s, error: %d: there is no 'indexes' member", req.url().to_human_readable().c_str(), -EINVAL);
+			if (!doc.HasMember("greylock")) {
+				ILOG_ERROR("url: %s, error: %d: there is no 'greylock' member", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
-			const auto &idxs = doc["indexes"];
+			const auto &idxs = doc["greylock"];
 
 			if (!idxs.IsArray()) {
-				ILOG_ERROR("url: %s, error: %d: 'indexes' must be array", req.url().to_human_readable().c_str(), -EINVAL);
+				ILOG_ERROR("url: %s, error: %d: 'greylock' must be array", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
@@ -243,24 +243,24 @@ public:
 				}
 			}
 
-			std::set<indexes::eurl> raw_indexes_set;
+			std::set<greylock::eurl> raw_greylock_set;
 			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
 				if (!idx->IsString())
 					continue;
 
-				indexes::eurl start;
+				greylock::eurl start;
 				start.bucket = server()->meta_bucket_name();
 				start.key = idx->GetString();
 
-				raw_indexes_set.emplace(start);
+				raw_greylock_set.emplace(start);
 			}
 
-			std::vector<indexes::eurl> raw_indexes(raw_indexes_set.begin(), raw_indexes_set.end());
+			std::vector<greylock::eurl> raw_greylock(raw_greylock_set.begin(), raw_greylock_set.end());
 
-			std::vector<indexes::key> result;
+			std::vector<greylock::key> result;
 			bool completed = true;
 
-			completed = intersect(raw_indexes, page_start, page_num, result);
+			completed = intersect(raw_greylock, page_start, page_num, result);
 
 			JsonValue ret;
 			auto &allocator = ret.GetAllocator();
@@ -302,18 +302,18 @@ public:
 			this->send_reply(std::move(reply), std::move(data));
 		}
 
-		bool intersect(const std::vector<indexes::eurl> &raw_indexes,
-				std::string &page_start, int page_num, std::vector<indexes::key> &result) {
-			indexes::intersect::intersector<indexes::bucket_transport> p(*(server()->bucket()));
+		bool intersect(const std::vector<greylock::eurl> &raw_greylock,
+				std::string &page_start, int page_num, std::vector<greylock::key> &result) {
+			greylock::intersect::intersector<greylock::bucket_transport> p(*(server()->bucket()));
 
 			std::vector<locker<http_server>> lockers;
 			// this reserve is absolutely needed, since elements of vector of unique locks
 			// use references to this array to grab locker's state
-			lockers.reserve(raw_indexes.size());
+			lockers.reserve(raw_greylock.size());
 
 			std::vector<std::unique_lock<locker<http_server>>> locks;
-			locks.reserve(raw_indexes.size());
-			for (auto it = raw_indexes.begin(), end = raw_indexes.end(); it != end; ++it) {
+			locks.reserve(raw_greylock.size());
+			for (auto it = raw_greylock.begin(), end = raw_greylock.end(); it != end; ++it) {
 				locker<http_server> l(server(), it->key);
 				lockers.emplace_back(std::move(l));
 
@@ -321,7 +321,7 @@ public:
 				locks.emplace_back(std::move(lk));
 			}
 
-			indexes::intersect::result res = p.intersect(raw_indexes, page_start, page_num);
+			greylock::intersect::result res = p.intersect(raw_greylock, page_start, page_num);
 
 			if (res.keys.size()) {
 				auto &v = res.keys.begin()->second;
@@ -348,15 +348,15 @@ public:
 				return;
 			}
 
-			if (!doc.HasMember("indexes")) {
-				ILOG_ERROR("url: %s, error: %d: there is no 'indexes' member", req.url().to_human_readable().c_str(), -EINVAL);
+			if (!doc.HasMember("greylock")) {
+				ILOG_ERROR("url: %s, error: %d: there is no 'greylock' member", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
 
 			const auto &ids = doc["ids"];
-			const auto &idxs = doc["indexes"];
+			const auto &idxs = doc["greylock"];
 
 			if (!ids.IsArray()) {
 				ILOG_ERROR("url: %s, error: %d: 'ids' must be array", req.url().to_human_readable().c_str(), -EINVAL);
@@ -365,16 +365,16 @@ public:
 			}
 
 			if (!idxs.IsArray()) {
-				ILOG_ERROR("url: %s, error: %d: 'indexes' must be array", req.url().to_human_readable().c_str(), -EINVAL);
+				ILOG_ERROR("url: %s, error: %d: 'greylock' must be array", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
 
-			std::vector<indexes::key> keys;
+			std::vector<greylock::key> keys;
 			for (auto it = ids.Begin(), id_end = ids.End(); it != id_end; ++it) {
 				if (it->IsObject()) {
-					indexes::key k;
+					greylock::key k;
 
 					if (!it->HasMember("key"))
 						continue;
@@ -402,14 +402,14 @@ public:
 				if (!idx->IsString())
 					continue;
 
-				indexes::eurl start;
+				greylock::eurl start;
 				start.bucket = server()->meta_bucket_name();
 				start.key = idx->GetString();
 
 				locker<http_server> l(server(), start.key);
 				std::unique_lock<locker<http_server>> lk(l);
 
-				indexes::index<indexes::bucket_transport> index(*(server()->bucket()), start);
+				greylock::index<greylock::bucket_transport> index(*(server()->bucket()), start);
 
 				for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
 					int err = index.insert(*it);
@@ -431,7 +431,7 @@ public:
 		}
 	};
 
-	std::shared_ptr<indexes::bucket_transport> bucket() {
+	std::shared_ptr<greylock::bucket_transport> bucket() {
 		return m_bucket;
 	}
 
@@ -453,7 +453,7 @@ private:
 	std::shared_ptr<elliptics::node> m_node;
 
 	std::string m_meta_bucket;
-	std::shared_ptr<indexes::bucket_transport> m_bucket;
+	std::shared_ptr<greylock::bucket_transport> m_bucket;
 
 	long m_read_timeout = 60;
 	long m_write_timeout = 60;
@@ -472,7 +472,7 @@ private:
 			return false;
 		}
 
-		m_bucket.reset(new indexes::bucket_transport(m_node));
+		m_bucket.reset(new greylock::bucket_transport(m_node));
 
 		if (!prepare_session(config)) {
 			return false;
@@ -597,7 +597,7 @@ private:
 		return true;
 	}
 
-	bool indexes_init(const rapidjson::Value &config) {
+	bool greylock_init(const rapidjson::Value &config) {
 		if (config.HasMember("lock-num")) {
 			auto &ln = config["lock-num"];
 			if (ln.IsNumber()) {
@@ -608,13 +608,13 @@ private:
 		if (config.HasMember("max-page-size")) {
 			auto &ps = config["max-page-size"];
 			if (ps.IsNumber())
-				ioremap::indexes::max_page_size = ps.GetInt();
+				ioremap::greylock::max_page_size = ps.GetInt();
 		}
 
 		if (config.HasMember("reserve-size")) {
 			auto &ps = config["reserve-size"];
 			if (ps.IsNumber())
-				ioremap::indexes::default_reserve_size = ps.GetInt();
+				ioremap::greylock::default_reserve_size = ps.GetInt();
 		}
 
 		return true;

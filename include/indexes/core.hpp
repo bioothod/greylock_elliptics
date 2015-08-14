@@ -4,7 +4,7 @@
 #include <string>
 #include <msgpack.hpp>
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 
 static size_t max_page_size = 6144;
 static size_t default_reserve_size = max_page_size / 4;
@@ -47,6 +47,6 @@ struct eurl {
 	}
 };
 
-}} // namespace ioremap::indexes
+}} // namespace ioremap::greylock
 
 #endif // __INDEXES_CORE_HPP

@@ -1,8 +1,8 @@
 #include <iostream>
 
-#include "indexes/bucket_transport.hpp"
-#include "indexes/elliptics.hpp"
-#include "indexes/intersection.hpp"
+#include "greylock/bucket_transport.hpp"
+#include "greylock/elliptics.hpp"
+#include "greylock/intersection.hpp"
 
 #include <boost/program_options.hpp>
 
@@ -17,15 +17,15 @@ class test {
 #define func(name, args...) __stringify(name), name, ##args
 public:
 	test(T &t, const std::string &bname) : m_bucket(bname) {
-		indexes::eurl start;
+		greylock::eurl start;
 		start.key = "test" + elliptics::lexical_cast(rand());
 		start.bucket = m_bucket;
 
-		indexes::index<T> idx(t, start);
+		greylock::index<T> idx(t, start);
 
 		test::run(this, func(&test::test_remove_some_keys, t, 10000));
 
-		std::vector<indexes::key> keys;
+		std::vector<greylock::key> keys;
 		if (t.get_groups().size() > 1)
 			test::run(this, func(&test::test_index_recovery, t, 10000));
 		test::run(this, func(&test::test_insert_many_keys, idx, keys, 10000));
@@ -50,9 +50,9 @@ private:
 		}
 	}
 
-	void test_insert_many_keys(indexes::index<T> &idx, std::vector<indexes::key> &keys, int max) {
+	void test_insert_many_keys(greylock::index<T> &idx, std::vector<greylock::key> &keys, int max) {
 		for (int i = 0; i < max; ++i) {
-			indexes::key k;
+			greylock::key k;
 
 			char buf[128];
 
@@ -71,15 +71,15 @@ private:
 	}
 
 	void test_remove_some_keys(T &t, int max) {
-		indexes::eurl start;
+		greylock::eurl start;
 		start.key = "remove-test-index." + elliptics::lexical_cast(rand());
 		start.bucket = m_bucket;
 
-		indexes::index<T> idx(t, start);
-		std::vector<indexes::key> keys;
+		greylock::index<T> idx(t, start);
+		std::vector<greylock::key> keys;
 
 		for (int i = 0; i < max; ++i) {
-			indexes::key k;
+			greylock::key k;
 
 			char buf[128];
 
@@ -103,7 +103,7 @@ private:
 				idx.meta().str().c_str(), keys.size() / 2, tm.elapsed());
 
 		for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
-			indexes::key found = idx.search(*it);
+			greylock::key found = idx.search(*it);
 			if (it < keys.begin() + keys.size() / 2) {
 				if (found) {
 					std::ostringstream ss;
@@ -123,16 +123,16 @@ private:
 	void test_index_recovery(T &t, int max) {
 		std::vector<int> groups = t.get_groups();
 
-		indexes::eurl name;
+		greylock::eurl name;
 		name.key = "recovery-test." + elliptics::lexical_cast(rand());
 		name.bucket = m_bucket;
 
-		indexes::index<T> idx(t, name);
+		greylock::index<T> idx(t, name);
 
-		std::vector<indexes::key> keys;
+		std::vector<greylock::key> keys;
 
 		for (int i = 0; i < max; ++i) {
-			indexes::key k;
+			greylock::key k;
 			k.id = elliptics::lexical_cast(rand()) + ".recovery-key." + elliptics::lexical_cast(i);
 			k.url.key = "recovery-value." + elliptics::lexical_cast(i);
 			k.url.bucket = m_bucket;
@@ -153,7 +153,7 @@ private:
 		t.set_groups(groups);
 		ribosome::timer tm;
 		// index constructor self-heals itself
-		indexes::index<T> rec(t, name);
+		greylock::index<T> rec(t, name);
 
 		groups = t.get_groups();
 		std::vector<int> tmp;
@@ -165,10 +165,10 @@ private:
 
 
 		for (auto it = keys.begin(); it != keys.end(); ++it) {
-			indexes::key s;
+			greylock::key s;
 			s.id = it->id;
 
-			indexes::key found = rec.search(s);
+			greylock::key found = rec.search(s);
 			if (!found) {
 				std::ostringstream ss;
 				ss << "search failed: could not find key: " << it->id.c_str();
@@ -193,12 +193,12 @@ private:
 		t.set_groups(groups);
 	}
 
-	void test_select_many_keys(indexes::index<T> &idx, std::vector<indexes::key> &keys) {
+	void test_select_many_keys(greylock::index<T> &idx, std::vector<greylock::key> &keys) {
 		for (auto it = keys.begin(); it != keys.end(); ++it) {
-			indexes::key k;
+			greylock::key k;
 
 			k.id = it->id;
-			indexes::key found = idx.search(k);
+			greylock::key found = idx.search(k);
 			if (!found) {
 				std::ostringstream ss;
 				ss << "search failed: could not find key: " << it->id.c_str();
@@ -220,7 +220,7 @@ private:
 		}
 	}
 
-	void test_iterator_number(indexes::index<T> &idx, std::vector<indexes::key> &keys) {
+	void test_iterator_number(greylock::index<T> &idx, std::vector<greylock::key> &keys) {
 		size_t num = 0;
 		for (auto it = idx.begin(), end = idx.end(); it != end; ++it) {
 			dprintf("iterator: %s\n", it->str().c_str());
@@ -234,7 +234,7 @@ private:
 		}
 	}
 
-	void test_page_iterator(indexes::index<T> &idx) {
+	void test_page_iterator(greylock::index<T> &idx) {
 		size_t page_num = 0;
 		size_t leaf_num = 0;
 		for (auto it = idx.page_begin(), end = idx.page_end(); it != end; ++it) {
@@ -243,7 +243,7 @@ private:
 			if (it->is_leaf())
 				leaf_num++;
 		}
-		indexes::index_meta meta = idx.meta();
+		greylock::index_meta meta = idx.meta();
 		printf("meta: %s\n", meta.str().c_str());
 
 		if (page_num != meta.num_pages) {
@@ -267,12 +267,12 @@ private:
 		}
 	}
 
-	void test_intersection(T &t, int num_indexes, size_t same_num, size_t different_num) {
-		std::vector<indexes::eurl> indexes;
-		std::vector<indexes::key> same;
+	void test_intersection(T &t, int num_greylock, size_t same_num, size_t different_num) {
+		std::vector<greylock::eurl> greylock;
+		std::vector<greylock::key> same;
 
 		for (size_t i = 0; i < same_num; ++i) {
-			indexes::key k;
+			greylock::key k;
 			k.id = elliptics::lexical_cast(rand()) + ".url-same-key." + elliptics::lexical_cast(i);
 			k.url.key = "url-same-data." + elliptics::lexical_cast(i);
 			k.url.bucket = m_bucket;
@@ -280,16 +280,16 @@ private:
 			same.emplace_back(k);
 		}
 
-		for (int i = 0; i < num_indexes; ++i) {
-			indexes::eurl url;
+		for (int i = 0; i < num_greylock; ++i) {
+			greylock::eurl url;
 			url.bucket = m_bucket;
 			url.key = "intersection-index.rand." + elliptics::lexical_cast(i) + "." + elliptics::lexical_cast(rand());
-			indexes.push_back(url);
+			greylock.push_back(url);
 
-			indexes::index<T> idx(t, url);
+			greylock::index<T> idx(t, url);
 
 			for (size_t j = 0; j < different_num; ++j) {
-				indexes::key k;
+				greylock::key k;
 
 				k.id = elliptics::lexical_cast(rand()) + ".url-random-key." + elliptics::lexical_cast(i);
 				k.url.key = "url-random-data." + elliptics::lexical_cast(i);
@@ -304,7 +304,7 @@ private:
 		}
 
 		struct index_checker {
-			index_checker(const indexes::intersect::result &res, size_t same_num) {
+			index_checker(const greylock::intersect::result &res, size_t same_num) {
 				size_t size = 0;
 				for (auto it = res.keys.begin(), end = res.keys.end(); it != end; ++it) {
 					if (!size) {
@@ -314,7 +314,7 @@ private:
 
 					if (size != it->second.size() || size != same_num) {
 						std::ostringstream ss;
-						ss << "intersection failed: indexes: " << res.keys.size() <<
+						ss << "intersection failed: greylock: " << res.keys.size() <<
 							", same keys in each index: " << same_num <<
 							", current-index: " << it->first.str() <<
 							", found keys (must be equal to the same jeys in each index): " << it->second.size();
@@ -323,7 +323,7 @@ private:
 				}
 
 				for (size_t i = 0; i < size; ++i) {
-					indexes::key k;
+					greylock::key k;
 					for (auto it = res.keys.begin(), end = res.keys.end(); it != end; ++it) {
 						if (!k) {
 							k = it->second[i];
@@ -332,7 +332,7 @@ private:
 
 						if (k != it->second[i]) {
 							std::ostringstream ss;
-							ss << "intersection failed: indexes: " << res.keys.size() <<
+							ss << "intersection failed: greylock: " << res.keys.size() <<
 								", same keys in each index: " << same_num <<
 								", current-index: " << it->first.str() <<
 								", mismatch position: " << i <<
@@ -346,8 +346,8 @@ private:
 		};
 
 		ribosome::timer tm;
-		indexes::intersect::intersector<T> inter(t);
-		indexes::intersect::result res = inter.intersect(indexes);
+		greylock::intersect::intersector<T> inter(t);
+		greylock::intersect::result res = inter.intersect(greylock);
 		for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
 			printf("index: %s, keys: %zd\n", it->first.str().c_str(), it->second.size());
 			for (auto k = it->second.begin(); k != it->second.end(); ++k) {
@@ -355,18 +355,18 @@ private:
 			}
 		}
 
-		printf("intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
-				num_indexes, res.keys.size(), same_num, same_num + different_num, tm.restart());
+		printf("intersection: greylock: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
+				num_greylock, res.keys.size(), same_num, same_num + different_num, tm.restart());
 
 		index_checker c(res, same_num);
 
-		indexes::intersect::intersector<T> p(t);
+		greylock::intersect::intersector<T> p(t);
 		std::string start("\0");
 		size_t num = same_num / 10;
 		size_t num_found = 0;
 
 		while (true) {
-			indexes::intersect::result res = p.intersect(indexes, start, num);
+			greylock::intersect::result res = p.intersect(greylock, start, num);
 
 			if (!res.keys.size())
 				break;
@@ -390,11 +390,11 @@ private:
 				break;
 		}
 
-		printf("paginated intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
-				num_indexes, num_found, same_num, same_num + different_num, tm.restart());
+		printf("paginated intersection: greylock: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
+				num_greylock, num_found, same_num, same_num + different_num, tm.restart());
 		if (num_found != same_num) {
 			std::ostringstream ss;
-			ss << "paginated intersection failed: indexes: " << num_indexes << ", same keys in each index: " << same_num <<
+			ss << "paginated intersection failed: greylock: " << num_greylock << ", same keys in each index: " << same_num <<
 				", found keys: " << num_found <<
 				", total keys in each index: " << different_num + same_num;
 			throw std::runtime_error(ss.str());
@@ -449,17 +449,17 @@ int main(int argc, char *argv[])
 
 	dprintf("index: init: t: %zd\n", tm);
 
-	indexes::elliptics_transport t(log_file, log_level);
+	greylock::elliptics_transport t(log_file, log_level);
 	t.add_remotes(remotes);
 
 	if (bnames.size() != 0) {
-		indexes::bucket_transport bt(t.get_node());
+		greylock::bucket_transport bt(t.get_node());
 		bt.init(elliptics::parse_groups(groups.c_str()), bnames);
 		bt.test();
 
-		test<indexes::bucket_transport> tt(bt, bnames[0]);
+		test<greylock::bucket_transport> tt(bt, bnames[0]);
 	} else {
 		t.set_groups(elliptics::parse_groups(groups.c_str()));
-		test<indexes::elliptics_transport> tt(t, "");
+		test<greylock::elliptics_transport> tt(t, "");
 	}
 }

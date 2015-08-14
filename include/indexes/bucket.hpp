@@ -1,8 +1,8 @@
 #ifndef __INDEXES_BUCKET_HPP
 #define __INDEXES_BUCKET_HPP
 
-#include "indexes/elliptics_stat.hpp"
-#include "indexes/error.hpp"
+#include "greylock/elliptics_stat.hpp"
+#include "greylock/error.hpp"
 
 #include <elliptics/session.hpp>
 
@@ -15,7 +15,7 @@
 #include <string>
 #include <thread>
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 
 struct bucket_acl {
 	enum {
@@ -741,11 +741,11 @@ private:
 	}
 };
 
-}} // namespace ioremap::indexes
+}} // namespace ioremap::greylock
 
 namespace msgpack
 {
-static inline ioremap::indexes::bucket_acl &operator >>(msgpack::object o, ioremap::indexes::bucket_acl &acl)
+static inline ioremap::greylock::bucket_acl &operator >>(msgpack::object o, ioremap::greylock::bucket_acl &acl)
 {
 	if (o.type != msgpack::type::ARRAY) {
 		std::ostringstream ss;
@@ -773,7 +773,7 @@ static inline ioremap::indexes::bucket_acl &operator >>(msgpack::object o, iorem
 		p[3].convert(&acl.flags);
 
 		if (version == 1) {
-			using namespace ioremap::indexes;
+			using namespace ioremap::greylock;
 			// Convert flags from old version to new one
 			const bool noauth_read = acl.flags & (1 << 0);
 			const bool noauth_all = acl.flags & (1 << 1);
@@ -795,7 +795,7 @@ static inline ioremap::indexes::bucket_acl &operator >>(msgpack::object o, iorem
 	default: {
 		std::ostringstream ss;
 		ss << "bucket acl unpack: version mismatch: read: " << version <<
-			", must be: <= " << ioremap::indexes::bucket_acl::serialization_version;
+			", must be: <= " << ioremap::greylock::bucket_acl::serialization_version;
 		throw std::runtime_error(ss.str());
 	}
 	}
@@ -804,10 +804,10 @@ static inline ioremap::indexes::bucket_acl &operator >>(msgpack::object o, iorem
 }
 
 template <typename Stream>
-inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::indexes::bucket_acl &acl)
+inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::greylock::bucket_acl &acl)
 {
 	o.pack_array(4);
-	o.pack((int)ioremap::indexes::bucket_acl::serialization_version);
+	o.pack((int)ioremap::greylock::bucket_acl::serialization_version);
 	o.pack(acl.user);
 	o.pack(acl.token);
 	o.pack(acl.flags);
@@ -816,10 +816,10 @@ inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const io
 }
 
 template <typename Stream>
-static inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::indexes::bucket_meta &m)
+static inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::greylock::bucket_meta &m)
 {
 	o.pack_array(10);
-	o.pack((int)ioremap::indexes::bucket_meta::serialization_version);
+	o.pack((int)ioremap::greylock::bucket_meta::serialization_version);
 	o.pack(m.name);
 	o.pack(m.acl);
 	o.pack(m.groups);
@@ -832,7 +832,7 @@ static inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, c
 	return o;
 }
 
-static inline ioremap::indexes::bucket_meta &operator >>(msgpack::object o, ioremap::indexes::bucket_meta &m)
+static inline ioremap::greylock::bucket_meta &operator >>(msgpack::object o, ioremap::greylock::bucket_meta &m)
 {
 	if (o.type != msgpack::type::ARRAY || o.via.array.size < 10) {
 		std::ostringstream ss;
@@ -867,7 +867,7 @@ static inline ioremap::indexes::bucket_meta &operator >>(msgpack::object o, iore
 	default: {
 		std::ostringstream ss;
 		ss << "bucket unpack: version mismatch: read: " << version <<
-			", must be: <= " << ioremap::indexes::bucket_meta::serialization_version;
+			", must be: <= " << ioremap::greylock::bucket_meta::serialization_version;
 		throw std::runtime_error(ss.str());
 	}
 	}

@@ -1,7 +1,7 @@
 #ifndef __INDEXES_INDEX_HPP
 #define __INDEXES_INDEX_HPP
 
-#include "indexes/page.hpp"
+#include "greylock/page.hpp"
 
 #include <blackhole/blackhole.hpp>
 
@@ -13,7 +13,7 @@
 #define INDEXES_LOG_NOTICE blackhole::defaults::severity::notice
 #define INDEXES_LOG_DEBUG blackhole::defaults::severity::debug
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 
 typedef blackhole::defaults::severity log_level;
 typedef blackhole::verbose_logger_t<log_level> logger_base;
@@ -588,6 +588,6 @@ private:
 	}
 };
 
-}} // namespace ioremap::indexes
+}} // namespace ioremap::greylock
 
 #endif // __INDEXES_INDEX_HPP

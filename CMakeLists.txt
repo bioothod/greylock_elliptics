@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 2.6)
-project (indexes)
+project (greylock)
 
 #FILE (READ "${CMAKE_CURRENT_SOURCE_DIR}/debian/changelog" DEBCHANGELOG)
 
@@ -28,11 +28,11 @@ LOCATE_LIBRARY(SWARM "swarm/http_request.hpp" "swarm")
 LOCATE_LIBRARY(LZ4 "lz4frame.h" "lz4")
 
 FILE(GLOB headers
-	"${CMAKE_CURRENT_SOURCE_DIR}/include/indexes/*.hpp"
-	"${CMAKE_CURRENT_SOURCE_DIR}/include/indexes/*.h"
+	"${CMAKE_CURRENT_SOURCE_DIR}/include/greylock/*.hpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/include/greylock/*.h"
 
 )
-install(FILES ${headers} DESTINATION include/indexes)
+install(FILES ${headers} DESTINATION include/greylock)
 
 include_directories(${PROJECT_SOURCE_DIR}/include
 	${MSGPACK_INCLUDE_DIRS}

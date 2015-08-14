@@ -1,12 +1,12 @@
 #ifndef __INDEXES_ELLIPTICS_HPP
 #define __INDEXES_ELLIPTICS_HPP
 
-#include "indexes/error.hpp"
-#include "indexes/core.hpp"
+#include "greylock/error.hpp"
+#include "greylock/core.hpp"
 
 #include <elliptics/session.hpp>
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 
 class elliptics_transport {
 public:
@@ -48,13 +48,13 @@ public:
 		return st;
 	}
 
-	status read(const indexes::eurl &key) {
+	status read(const greylock::eurl &key) {
 		elliptics::session s = session(m_groups, true);
 		s.set_namespace(key.bucket);
 		return status(s.read_data(key.key, 0, 0).get_one());
 	}
 
-	std::vector<status> read_all(const indexes::eurl &key) {
+	std::vector<status> read_all(const greylock::eurl &key) {
 		std::vector<elliptics::async_read_result> results;
 
 		elliptics::session s = session(m_groups, true);
@@ -76,7 +76,7 @@ public:
 		return ret;
 	}
 
-	std::vector<status> write(const std::vector<int> groups, const indexes::eurl &key,
+	std::vector<status> write(const std::vector<int> groups, const greylock::eurl &key,
 			const std::string &data, size_t reserve_size, bool cache) {
 		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
 		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
@@ -119,11 +119,11 @@ public:
 		return ret;
 	}
 
-	std::vector<status> write(const indexes::eurl &key, const std::string &data, bool cache = false) {
+	std::vector<status> write(const greylock::eurl &key, const std::string &data, bool cache = false) {
 		return write(m_groups, key, data, default_reserve_size, cache);
 	}
 
-	std::vector<status> remove(const indexes::eurl &key) {
+	std::vector<status> remove(const greylock::eurl &key) {
 		elliptics::session s = session(m_groups, false);
 		s.set_namespace(key.bucket);
 

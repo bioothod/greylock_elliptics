@@ -1,11 +1,11 @@
 #ifndef __INDEXES_KEY_HPP
 #define __INDEXES_KEY_HPP
 
-#include "indexes/core.hpp"
+#include "greylock/core.hpp"
 
 #include <string>
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 
 struct key {
 	std::string id;
@@ -43,6 +43,6 @@ struct key {
 };
 
 
-}} // namespace ioremap::indexes
+}} // namespace ioremap::greylock
 
 #endif // __INDEXES_KEY_HPP

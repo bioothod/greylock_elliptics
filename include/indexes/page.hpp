@@ -1,21 +1,21 @@
 #ifndef __INDEXES_PAGE_HPP
 #define __INDEXES_PAGE_HPP
 
-#include "indexes/error.hpp"
-#include "indexes/key.hpp"
+#include "greylock/error.hpp"
+#include "greylock/key.hpp"
 
 #include <iterator>
 #include <vector>
 
 #include <lz4frame.h>
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 
 #define PAGE_LEAF		(1<<0)
 
 struct page {
 	uint32_t flags = 0;
-	std::vector<indexes::key> objects;
+	std::vector<greylock::key> objects;
 	size_t total_size = 0;
 	eurl next;
 
@@ -347,10 +347,10 @@ private:
 	}
 };
 
-}} // namespace ioremap::indexes
+}} // namespace ioremap::greylock
 
 namespace msgpack {
-static inline ioremap::indexes::page &operator >>(msgpack::object o, ioremap::indexes::page &page)
+static inline ioremap::greylock::page &operator >>(msgpack::object o, ioremap::greylock::page &page)
 {
 	if (o.type != msgpack::type::ARRAY) {
 		std::ostringstream ss;
@@ -365,8 +365,8 @@ static inline ioremap::indexes::page &operator >>(msgpack::object o, ioremap::in
 	uint16_t version = 0;
 	p[0].convert(&version);
 	switch (version) {
-	case ioremap::indexes::page::serialization_version_raw:
-	case ioremap::indexes::page::serialization_version_packed: {
+	case ioremap::greylock::page::serialization_version_raw:
+	case ioremap::greylock::page::serialization_version_packed: {
 		if (size != 4) {
 			std::ostringstream ss;
 			ss << "page unpack: array size mismatch: read: " << size << ", must be: 4";
@@ -377,10 +377,10 @@ static inline ioremap::indexes::page &operator >>(msgpack::object o, ioremap::in
 		p[2].convert(&page.next);
 
 		switch (version) {
-		case ioremap::indexes::page::serialization_version_raw:
+		case ioremap::greylock::page::serialization_version_raw:
 			p[3].convert(&page.objects);
 			break;
-		case ioremap::indexes::page::serialization_version_packed: {
+		case ioremap::greylock::page::serialization_version_packed: {
 			msgpack::unpacked result;
 
 			//msgpack::unpack(&result, raw.data(), raw.size());
@@ -419,7 +419,7 @@ static inline ioremap::indexes::page &operator >>(msgpack::object o, ioremap::in
 			src += src_size;
 			src_size = src_orig - src_size;
 
-			size_t dst_size = ioremap::indexes::max_page_size * 10;
+			size_t dst_size = ioremap::greylock::max_page_size * 10;
 			// unknown original size
 			if (fi.contentSize != 0)
 				dst_size = fi.contentSize;
@@ -469,7 +469,7 @@ static inline ioremap::indexes::page &operator >>(msgpack::object o, ioremap::in
 	default: {
 		std::ostringstream ss;
 		ss << "page unpack: version mismatch: read: " << version <<
-			", must be: < " << ioremap::indexes::page::serialization_version_max;
+			", must be: < " << ioremap::greylock::page::serialization_version_max;
 		throw std::runtime_error(ss.str());
 	}
 	}
@@ -478,10 +478,10 @@ static inline ioremap::indexes::page &operator >>(msgpack::object o, ioremap::in
 }
 
 template <typename Stream>
-inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::indexes::page &p)
+inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::greylock::page &p)
 {
 	o.pack_array(4);
-	o.pack((int)ioremap::indexes::page::serialization_version_packed);
+	o.pack((int)ioremap::greylock::page::serialization_version_packed);
 	o.pack(p.flags);
 	o.pack(p.next);
 

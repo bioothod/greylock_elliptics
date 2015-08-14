@@ -1,13 +1,13 @@
 #ifndef __INDEXES_STAT_HPP
 #define __INDEXES_STAT_HPP
 
-#include "indexes/error.hpp"
+#include "greylock/error.hpp"
 
 #include <elliptics/session.hpp>
 
 #include <thevoid/rapidjson/document.h>
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 static inline const char *get_string(const rapidjson::Value &entry, const char *name, const char *def = NULL) {
 	if (entry.HasMember(name)) {
 		const rapidjson::Value &v = entry[name];
@@ -339,6 +339,6 @@ private:
 	}
 };
 
-}} // namespace ioremap::indexes
+}} // namespace ioremap::greylock
 
 #endif // __INDEXES_STAT_HPP

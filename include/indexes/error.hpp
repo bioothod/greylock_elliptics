@@ -3,7 +3,7 @@
 
 #include <elliptics/session.hpp>
 
-namespace ioremap { namespace indexes {
+namespace ioremap { namespace greylock {
 
 struct status {
 	int				group;			// group this status came from
@@ -40,6 +40,6 @@ struct status {
 	}
 };
 
-}} // namespace ioremap::indexes
+}} // namespace ioremap::greylock
 
 #endif // __INDEXES_ERROR_HPP

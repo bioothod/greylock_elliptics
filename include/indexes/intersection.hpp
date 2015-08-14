@@ -1,15 +1,15 @@
 #ifndef __INDEXES_INTERSECTION_HPP
 #define __INDEXES_INTERSECTION_HPP
 
-#include "indexes/index.hpp"
+#include "greylock/index.hpp"
 
 #include <map>
 
-namespace ioremap { namespace indexes { namespace intersect {
+namespace ioremap { namespace greylock { namespace intersect {
 struct result {
 	bool completed = false;
 
-	// index name (eurl) -> set of keys from that index which match other indexes
+	// index name (eurl) -> set of keys from that index which match other greylock
 	// key IDs will be the same, but key data (url) can be different
 	std::map<eurl, std::vector<key>> keys;
 };
@@ -18,12 +18,12 @@ template <typename T>
 class intersector {
 public:
 	intersector(T &t) : m_t(t) {}
-	result intersect(const std::vector<eurl> &indexes) const {
+	result intersect(const std::vector<eurl> &greylock) const {
 		std::string start = std::string("\0");
-		return intersect(indexes, start, INT_MAX);
+		return intersect(greylock, start, INT_MAX);
 	}
 
-	// search for intersections between all @indexes
+	// search for intersections between all @greylock
 	// starting with the key @start, returning at most @num entries
 	//
 	// after @intersect() completes, it sets @start to the next key to start searching from
@@ -34,17 +34,17 @@ public:
 	// after call to this function returns, then intersection is completed.
 	//
 	// @result.completed will be set to true in this case.
-	result intersect(const std::vector<eurl> &indexes, std::string &start, size_t num) const {
+	result intersect(const std::vector<eurl> &greylock, std::string &start, size_t num) const {
 		struct iter {
 			index<T> idx;
-			indexes::iterator<T> begin, end;
+			greylock::iterator<T> begin, end;
 
 			iter(T &t, const eurl &name, const std::string &start) :
 				idx(t, name), begin(idx.begin(start)), end(idx.end()) {}
 		};
 		std::vector<iter> idata;
 
-		for_each(indexes.begin(), indexes.end(), [&] (const eurl &name) {
+		for_each(greylock.begin(), greylock.end(), [&] (const eurl &name) {
 				iter it(m_t, name, start);
 
 				idata.emplace_back(it);
@@ -107,11 +107,11 @@ public:
 				auto &min_it = idata[*it].begin;
 				key k = *min_it;
 
-				auto find_it = res.keys.find(indexes[*it]);
+				auto find_it = res.keys.find(greylock[*it]);
 				if (find_it == res.keys.end()) {
 					std::vector<key> kk;
 					kk.emplace_back(k);
-					auto pair = res.keys.insert(std::make_pair(indexes[*it], kk));
+					auto pair = res.keys.insert(std::make_pair(greylock[*it], kk));
 					find_it = pair.first;
 				} else {
 					find_it->second.emplace_back(k);
@@ -127,6 +127,6 @@ private:
 	T &m_t;
 };
 
-}}} // namespace ioremap::indexes::intersect
+}}} // namespace ioremap::greylock::intersect
 
 #endif // __INDEXES_INTERSECTION_HPP
