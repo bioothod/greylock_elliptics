@@ -17,3 +17,7 @@ target_link_libraries(greylock_server
 	${SWARM_LIBRARIES}
 	${LZ4_LIBRARIES}
 )
+
+install(TARGETS	greylock_server greylock_test
+	RUNTIME DESTINATION bin COMPONENT runtime)
+
