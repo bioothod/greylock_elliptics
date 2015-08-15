@@ -11,7 +11,7 @@ set(CMAKE_CXX_FLAGS "-g -std=c++0x -W -Wall -Wextra -fstack-protector-all")
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 
-find_package(Boost REQUIRED COMPONENTS system program_options)
+find_package(Boost REQUIRED COMPONENTS system program_options filesystem)
 find_package(Elliptics REQUIRED)
 
 find_path(RIBOSOME_INCLUDE_DIRS NAMES "ribosome/timer.hpp" PATH_SUFFIXES "ribosome")

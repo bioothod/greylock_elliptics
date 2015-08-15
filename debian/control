@@ -9,6 +9,7 @@ Build-Depends:
  libboost-dev,
  libboost-system-dev,
  libboost-program-options-dev,
+ libboost-filesystem-dev,
  elliptics-dev,
  elliptics-client,
  libmsgpack-dev,

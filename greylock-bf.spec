@@ -12,7 +12,7 @@ BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildRequires:	ribosome, elliptics-devel, elliptics-client
 BuildRequires:	libswarm3-devel, libthevoid3-devel
-BuildRequires:	boost-devel, boost-system, boost-program-options
+BuildRequires:	boost-devel, boost-system, boost-program-options, boost-filesystem
 BuildRequires:	msgpack-devel, lz4-devel
 BuildRequires:	cmake >= 2.6
 
