@@ -57,6 +57,7 @@ rm -rf %{buildroot}
 %files
 %defattr(-,root,root,-)
 %{_bindir}/greylock_server
+%doc conf/*.json conf/consul.d/*.json
 
 
 %files devel
