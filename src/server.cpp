@@ -476,9 +476,9 @@ public:
 				idx_pos++;
 			}
 
-			ILOG_INFO("url: %s, keys: %d, indexes: %d: completed",
+			ILOG_INFO("url: %s, keys: %d, indexes: %d: completed, index duration: %d ms",
 					req.url().to_human_readable().c_str(),
-					keys.size(), idxs.Size());
+					keys.size(), idxs.Size(), index_tm.elapsed());
 			this->send_reply(thevoid::http_response::ok);
 		}
 	};
