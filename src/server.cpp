@@ -210,16 +210,16 @@ public:
 			rapidjson::Document doc;
 			doc.Parse<0>(data.c_str());
 
-			if (!doc.HasMember("greylock")) {
-				ILOG_ERROR("url: %s, error: %d: there is no 'greylock' member", req.url().to_human_readable().c_str(), -EINVAL);
+			if (!doc.HasMember("indexes")) {
+				ILOG_ERROR("url: %s, error: %d: there is no 'indexes' member", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
-			const auto &idxs = doc["greylock"];
+			const auto &idxs = doc["indexes"];
 
 			if (!idxs.IsArray()) {
-				ILOG_ERROR("url: %s, error: %d: 'greylock' must be array", req.url().to_human_readable().c_str(), -EINVAL);
+				ILOG_ERROR("url: %s, error: %d: 'indexes' must be array", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
@@ -348,15 +348,15 @@ public:
 				return;
 			}
 
-			if (!doc.HasMember("greylock")) {
-				ILOG_ERROR("url: %s, error: %d: there is no 'greylock' member", req.url().to_human_readable().c_str(), -EINVAL);
+			if (!doc.HasMember("indexes")) {
+				ILOG_ERROR("url: %s, error: %d: there is no 'indexes' member", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
 
 			const auto &ids = doc["ids"];
-			const auto &idxs = doc["greylock"];
+			const auto &idxs = doc["indexes"];
 
 			if (!ids.IsArray()) {
 				ILOG_ERROR("url: %s, error: %d: 'ids' must be array", req.url().to_human_readable().c_str(), -EINVAL);
@@ -365,7 +365,7 @@ public:
 			}
 
 			if (!idxs.IsArray()) {
-				ILOG_ERROR("url: %s, error: %d: 'greylock' must be array", req.url().to_human_readable().c_str(), -EINVAL);
+				ILOG_ERROR("url: %s, error: %d: 'indexes' must be array", req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
