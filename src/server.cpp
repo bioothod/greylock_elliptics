@@ -18,6 +18,7 @@
 #include <thevoid/rapidjson/prettywriter.h>
 #include <thevoid/rapidjson/document.h>
 
+#include <ribosome/timer.hpp>
 
 #include <swarm/logger.hpp>
 
@@ -334,7 +335,8 @@ public:
 
 	struct on_index : public thevoid::simple_request_stream<http_server> {
 		virtual void on_request(const thevoid::http_request &req, const boost::asio::const_buffer &buffer) {
-			(void) req;
+			ribosome::timer index_tm;
+			ILOG_INFO("url: %s, start", req.url().to_human_readable().c_str());
 
 			// this is needed to put ending zero-byte, otherwise rapidjson parser will explode
 			std::string data(const_cast<char *>(boost::asio::buffer_cast<const char*>(buffer)), boost::asio::buffer_size(buffer));
@@ -398,7 +400,15 @@ public:
 				}
 			}
 
+			ILOG_INFO("url: %s, keys: %d, indexes: %d: start insertion",
+					req.url().to_human_readable().c_str(),
+					keys.size(), idxs.Size());
+
+			ribosome::timer all_tm;
+			int idx_pos = 0;
 			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
+				all_tm.restart();
+
 				if (!idx->IsString())
 					continue;
 
@@ -411,7 +421,12 @@ public:
 
 				greylock::index<greylock::bucket_transport> index(*(server()->bucket()), start);
 
+				ribosome::timer tm;
+
+				int pos = 0;
 				for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
+					tm.restart();
+
 					int err = index.insert(*it);
 					if (err < 0) {
 						ILOG_ERROR("url: %s, index: %s, key: %s, error: %d: could not insert new key",
@@ -421,12 +436,24 @@ public:
 						return;
 					}
 
-					ILOG_INFO("url: %s, index: %s, key: %s: inserted new key",
+					ILOG_INFO("url: %s, index: %s, keys: %d/%d, key: %s: inserted new key, duration: %d ms",
 						req.url().to_human_readable().c_str(), start.str().c_str(),
-						it->str().c_str());
+						pos, keys.size(),
+						it->str().c_str(), tm.elapsed());
+
+					pos++;
 				}
+
+				ILOG_INFO("url: %s, index: %s, keys: %d, idx: %d/%d: inserted all keys, duration: %d ms",
+					req.url().to_human_readable().c_str(), start.str().c_str(),
+					keys.size(), idx_pos, idxs.Size(), all_tm.elapsed());
+
+				idx_pos++;
 			}
 
+			ILOG_INFO("url: %s, keys: %d, indexes: %d: completed",
+					req.url().to_human_readable().c_str(),
+					keys.size(), idxs.Size());
 			this->send_reply(thevoid::http_response::ok);
 		}
 	};
