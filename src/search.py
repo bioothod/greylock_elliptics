@@ -20,7 +20,7 @@ class search_client():
         print js
 
         headers = {}
-        timeout = len(indexes) / 100 + 10
+        timeout = len(indexes) / 100 + 30
 
         r = requests.post(self.url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
         if r.status_code != requests.codes.ok:

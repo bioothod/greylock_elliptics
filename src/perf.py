@@ -2,9 +2,15 @@
 
 import argparse
 import json
+import logging
 import random
 import requests
 import time
+
+logging.basicConfig(filename='perf.log',
+        format='%(asctime)s %(levelname)s: perf: %(message)s',
+        level=logging.INFO)
+logging.getLogger().setLevel(logging.INFO)
 
 class client:
     def __init__(self, seed):
@@ -17,7 +23,7 @@ class client:
         self.num_indexes = 3000
         self.gen_indexes(self.num_indexes)
 
-        self.max_indexes_per_message = 3000
+        self.max_indexes_per_message = 300
 
     def rand_string(self, ln):
         return ''.join(random.sample(self.sample, ln))
@@ -58,12 +64,15 @@ class client:
         self.send(url, data)
 
     def test(self, url):
+        num = 0
         while True:
             start = time.time()
             self.generate_and_send(url)
             end = time.time()
 
-            print (end - start) * 1000.0
+            num += 1
+            logging.info("%d %d/%d %f", num, self.max_indexes_per_message, self.num_indexes, (end - start) * 1000.0)
+            print time.ctime(), num, self.max_indexes_per_message, self.num_indexes, (end - start) * 1000.0
 
 
 if __name__ == '__main__':
