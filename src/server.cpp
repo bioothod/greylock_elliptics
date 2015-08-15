@@ -203,7 +203,8 @@ public:
 
 	struct on_search : public thevoid::simple_request_stream<http_server> {
 		virtual void on_request(const thevoid::http_request &req, const boost::asio::const_buffer &buffer) {
-			(void) req;
+			ribosome::timer search_tm;
+			ILOG_INFO("url: %s: start", req.url().to_human_readable().c_str());
 
 			// this is needed to put ending zero-byte, otherwise rapidjson parser will explode
 			std::string data(const_cast<char *>(boost::asio::buffer_cast<const char*>(buffer)), boost::asio::buffer_size(buffer));
@@ -261,7 +262,11 @@ public:
 			std::vector<greylock::key> result;
 			bool completed = true;
 
-			completed = intersect(raw_greylock, page_start, page_num, result);
+
+			ILOG_INFO("url: %s: starting intersection, json parsing duration: %d ms",
+					req.url().to_human_readable().c_str(), search_tm.elapsed());
+
+			completed = intersect(req, raw_greylock, page_start, page_num, result);
 
 			JsonValue ret;
 			auto &allocator = ret.GetAllocator();
@@ -300,11 +305,18 @@ public:
 			reply.headers().set_content_type("text/json; charset=utf-8");
 			reply.headers().set_content_length(data.size());
 
+			ILOG_INFO("url: %s: found ids: %d, requested ids: %d, start: %s, completed: %d, duration: %d ms",
+					req.url().to_human_readable().c_str(),
+					ids.Size(), page_num, page_start.c_str(), completed,
+					search_tm.elapsed());
+
 			this->send_reply(std::move(reply), std::move(data));
 		}
 
-		bool intersect(const std::vector<greylock::eurl> &raw_greylock,
+		bool intersect(const thevoid::http_request &req, const std::vector<greylock::eurl> &raw_greylock,
 				std::string &page_start, int page_num, std::vector<greylock::key> &result) {
+			ribosome::timer tm;
+
 			greylock::intersect::intersector<greylock::bucket_transport> p(*(server()->bucket()));
 
 			std::vector<locker<http_server>> lockers;
@@ -322,12 +334,25 @@ public:
 				locks.emplace_back(std::move(lk));
 			}
 
+			ILOG_INFO("url: %s: locks: %d: intersection locked: duration: %d ms",
+					req.url().to_human_readable().c_str(),
+					raw_greylock.size(),
+					tm.elapsed());
+
+			ribosome::timer intersect_tm;
 			greylock::intersect::result res = p.intersect(raw_greylock, page_start, page_num);
 
 			if (res.keys.size()) {
 				auto &v = res.keys.begin()->second;
 				result.swap(v);
 			}
+
+			ILOG_INFO("url: %s: locks: %d: completed: %d, result keys: %d, requested num: %d, page start: %s: "
+					"intersection completed: duration: %d ms, whole duration: %d ms",
+					req.url().to_human_readable().c_str(),
+					raw_greylock.size(), res.completed, result.size(),
+					page_num, page_start.c_str(),
+					intersect_tm.elapsed(), tm.elapsed());
 
 			return res.completed;
 		}
@@ -336,7 +361,7 @@ public:
 	struct on_index : public thevoid::simple_request_stream<http_server> {
 		virtual void on_request(const thevoid::http_request &req, const boost::asio::const_buffer &buffer) {
 			ribosome::timer index_tm;
-			ILOG_INFO("url: %s, start", req.url().to_human_readable().c_str());
+			ILOG_INFO("url: %s: start", req.url().to_human_readable().c_str());
 
 			// this is needed to put ending zero-byte, otherwise rapidjson parser will explode
 			std::string data(const_cast<char *>(boost::asio::buffer_cast<const char*>(buffer)), boost::asio::buffer_size(buffer));
