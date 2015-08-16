@@ -103,7 +103,7 @@ public:
 		ctl.io.size = dp.size();
 		ctl.io.num = reserve_size;
 		if (ctl.io.size > ctl.io.num) {
-			ctl.io.num = ctl.io.size * 2;
+			ctl.io.num = default_reserve_size = ctl.io.size * 1.5;
 		}
 
 		memcpy(&ctl.id, &id.id(), sizeof(ctl.id));

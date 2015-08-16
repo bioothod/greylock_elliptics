@@ -1,6 +1,7 @@
 #ifndef __INDEXES_BUCKET_HPP
 #define __INDEXES_BUCKET_HPP
 
+#include "greylock/core.hpp"
 #include "greylock/elliptics_stat.hpp"
 #include "greylock/error.hpp"
 
@@ -211,7 +212,7 @@ public:
 		ctl.io.size = dp.size();
 		ctl.io.num = reserve_size;
 		if (ctl.io.size > ctl.io.num) {
-			ctl.io.num = ctl.io.size * 1.5;
+			ctl.io.num = default_reserve_size = ctl.io.size * 1.5;
 		}
 
 		memcpy(&ctl.id, &id.id(), sizeof(ctl.id));
