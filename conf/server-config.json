@@ -15,7 +15,8 @@
                 },
                 "sink": {
                     "type": "files",
-                    "path": "/dev/stdout",
+                    "path1": "/dev/stdout",
+                    "path": "greylock.log",
                     "autoflush": true,
                     "rotation": { "move": 0 }
                 }
