@@ -22,15 +22,15 @@ typedef blackhole::wrapper_t<logger_base> logger;
 
 struct index_meta {
 	enum {
-		serialization_version_1 = 1,
-		serialization_version_max
+		serialization_version_6 = 6
 	};
 
 	index_meta() {
 		page_index = 0;
 		num_pages = 0;
 		num_leaf_pages = 0;
-		generation_number = 0;
+		generation_number_sec = 0;
+		generation_number_nsec = 0;
 	}
 
 	index_meta(const index_meta &o) {
@@ -41,7 +41,8 @@ struct index_meta {
 		page_index = o.page_index.load();
 		num_pages = o.num_pages.load();
 		num_leaf_pages = o.num_leaf_pages.load();
-		generation_number = o.generation_number.load();
+		generation_number_sec = o.generation_number_sec.load();
+		generation_number_nsec = o.generation_number_nsec.load();
 
 		return *this;
 	}
@@ -49,13 +50,24 @@ struct index_meta {
 	std::atomic<unsigned long long> page_index;
 	std::atomic<unsigned long long> num_pages;
 	std::atomic<unsigned long long> num_leaf_pages;
-	std::atomic<unsigned long long> generation_number;
+	std::atomic<unsigned long long> generation_number_sec;
+	std::atomic<unsigned long long> generation_number_nsec;
+
+	void update_generation_number() {
+		struct timeval tv;
+
+		gettimeofday(&tv, NULL);
+
+		generation_number_sec = tv.tv_sec;
+		generation_number_nsec = tv.tv_usec * 1000;
+	}
 
 	bool operator != (const index_meta &other) const {
 		return ((page_index != other.page_index) ||
 				(num_pages != other.num_pages) ||
 				(num_leaf_pages != other.num_leaf_pages) ||
-				(generation_number != other.generation_number)
+				(generation_number_sec != other.generation_number_sec) ||
+				(generation_number_nsec != other.generation_number_nsec)
 			);
 	}
 
@@ -64,7 +76,7 @@ struct index_meta {
 		ss << "page_index: " << page_index <<
 			", num_pages: " << num_pages <<
 			", num_leaf_pages: " << num_leaf_pages <<
-			", generation_number: " << generation_number;
+			", generation_number: " << generation_number_sec << "." << generation_number_nsec;
 		return ss.str();
 	}
 };
@@ -121,18 +133,27 @@ public:
 			throw std::runtime_error(ss.str());
 		}
 
-		uint64_t highest_generation_number = 0;
+		uint64_t highest_generation_number_sec = 0;
+		uint64_t highest_generation_number_nsec = 0;
 		for (auto it = mg.begin(), end = mg.end(); it != end; ++it) {
-			if (it->meta.generation_number >= highest_generation_number) {
-				highest_generation_number = it->meta.generation_number;
+			if (it->meta.generation_number_sec >= highest_generation_number_sec) {
+				highest_generation_number_sec = it->meta.generation_number_sec;
+				highest_generation_number_nsec = it->meta.generation_number_nsec;
 				m_meta = it->meta;
+			} else if (it->meta.generation_number_sec == highest_generation_number_sec) {
+				if (it->meta.generation_number_nsec >= highest_generation_number_nsec) {
+					highest_generation_number_sec = it->meta.generation_number_sec;
+					highest_generation_number_nsec = it->meta.generation_number_nsec;
+					m_meta = it->meta;
+				}
 			}
 		}
 
 		std::vector<int> recovery_groups;
 		std::vector<int> good_groups;
 		for (auto it = mg.begin(), end = mg.end(); it != end; ++it) {
-			if (it->meta.generation_number == highest_generation_number) {
+			if ((it->meta.generation_number_sec == highest_generation_number_sec) &&
+					(it->meta.generation_number_nsec == highest_generation_number_nsec)) {
 				good_groups.push_back(it->group);
 			} else {
 				recovery_groups.push_back(it->group);
@@ -141,7 +162,7 @@ public:
 
 		m_t.set_groups(good_groups);
 
-		if (highest_generation_number == 0) {
+		if ((highest_generation_number_sec == 0) && (highest_generation_number_nsec == 0)) {
 			if (!m_read_only) {
 				start_page_init();
 				return;
@@ -219,7 +240,7 @@ public:
 		if (ret < 0)
 			return ret;
 
-		m_meta.generation_number++;
+		m_meta.update_generation_number();
 		return 0;
 	}
 
@@ -236,7 +257,7 @@ public:
 		if (ret < 0)
 			return ret;
 
-		m_meta.generation_number++;
+		m_meta.update_generation_number();
 		return 0;
 	}
 
@@ -680,10 +701,11 @@ static inline ioremap::greylock::index_meta &operator >>(msgpack::object o, iore
 	uint16_t version = 0;
 	p[0].convert(&version);
 	switch (version) {
-	case ioremap::greylock::index_meta::serialization_version_1: {
-		if (size != 5) {
+	case ioremap::greylock::index_meta::serialization_version_6: {
+		if (size != ioremap::greylock::index_meta::serialization_version_6) {
 			std::ostringstream ss;
-			ss << "page unpack: array size mismatch: read: " << size << ", must be: 4";
+			ss << "page unpack: array size mismatch: read: " << size <<
+				", must be: " << ioremap::greylock::index_meta::serialization_version_6;
 			throw std::runtime_error(ss.str());
 		}
 
@@ -699,13 +721,16 @@ static inline ioremap::greylock::index_meta &operator >>(msgpack::object o, iore
 		meta.num_leaf_pages = tmp;
 
 		p[4].convert(&tmp);
-		meta.generation_number = tmp;
+		meta.generation_number_sec = tmp;
+
+		p[5].convert(&tmp);
+		meta.generation_number_nsec = tmp;
 		break;
 	}
 	default: {
 		std::ostringstream ss;
 		ss << "page unpack: version mismatch: read: " << version <<
-			", must be: < " << ioremap::greylock::page::serialization_version_max;
+			", there is no such packing version ";
 		throw std::runtime_error(ss.str());
 	}
 	}
@@ -716,12 +741,13 @@ static inline ioremap::greylock::index_meta &operator >>(msgpack::object o, iore
 template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::greylock::index_meta &meta)
 {
-	o.pack_array(5);
-	o.pack((int)ioremap::greylock::index_meta::serialization_version_1);
+	o.pack_array(ioremap::greylock::index_meta::serialization_version_6);
+	o.pack((int)ioremap::greylock::index_meta::serialization_version_6);
 	o.pack(meta.page_index.load());
 	o.pack(meta.num_pages.load());
 	o.pack(meta.num_leaf_pages.load());
-	o.pack(meta.generation_number.load());
+	o.pack(meta.generation_number_sec.load());
+	o.pack(meta.generation_number_nsec.load());
 
 	return o;
 }
