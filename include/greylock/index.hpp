@@ -5,6 +5,7 @@
 
 #include <blackhole/blackhole.hpp>
 
+#include <atomic>
 #include <map>
 
 #define INDEXES_LOG_ERROR blackhole::defaults::severity::error
@@ -20,12 +21,35 @@ typedef blackhole::verbose_logger_t<log_level> logger_base;
 typedef blackhole::wrapper_t<logger_base> logger;
 
 struct index_meta {
-	uint64_t page_index = 0;
-	uint64_t num_pages = 0;
-	uint64_t num_leaf_pages = 0;
-	uint64_t generation_number = 0;
+	enum {
+		serialization_version_1 = 1,
+		serialization_version_max
+	};
 
-	MSGPACK_DEFINE(page_index, num_pages, num_leaf_pages, generation_number);
+	index_meta() {
+		page_index = 0;
+		num_pages = 0;
+		num_leaf_pages = 0;
+		generation_number = 0;
+	}
+
+	index_meta(const index_meta &o) {
+		*this = o;
+	}
+
+	index_meta &operator=(const index_meta &o) {
+		page_index = o.page_index.load();
+		num_pages = o.num_pages.load();
+		num_leaf_pages = o.num_leaf_pages.load();
+		generation_number = o.generation_number.load();
+
+		return *this;
+	}
+
+	std::atomic<unsigned long long> page_index;
+	std::atomic<unsigned long long> num_pages;
+	std::atomic<unsigned long long> num_leaf_pages;
+	std::atomic<unsigned long long> generation_number;
 
 	bool operator != (const index_meta &other) const {
 		return ((page_index != other.page_index) ||
@@ -182,6 +206,10 @@ public:
 		return found.first.objects[found.second];
 	}
 
+	int insert(const key &obj) const {
+		return -EPERM;
+	}
+
 	int insert(const key &obj) {
 		if (m_read_only)
 			return -EPERM;
@@ -193,6 +221,10 @@ public:
 
 		m_meta.generation_number++;
 		return 0;
+	}
+
+	int remove(const key &obj) const {
+		return -EPERM;
 	}
 
 	int remove(const key &obj) {
@@ -486,13 +518,14 @@ private:
 			if (err)
 				return err;
 
-			m_meta.num_pages++;
-
 			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: write split page: %s -> %s, "
 					"old_root_key: %s, new_root: %s",
 					obj.str().c_str(),
 					page_key.str().c_str(), p.str().c_str(),
 					old_root_key.str().c_str(), new_root.str().c_str());
+
+			m_meta.num_pages++;
+
 		} else {
 			BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: %s: write main page: %s -> %s",
 				obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
@@ -593,6 +626,7 @@ private:
 
 		eurl ret;
 		ret.bucket = st.data.to_string();
+
 		ret.key = m_sk.key + "." + elliptics::lexical_cast(m_meta.page_index);
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key: %s", ret.str().c_str());
 		m_meta.page_index++;
@@ -629,5 +663,70 @@ public:
 };
 
 }} // namespace ioremap::greylock
+
+namespace msgpack {
+static inline ioremap::greylock::index_meta &operator >>(msgpack::object o, ioremap::greylock::index_meta &meta)
+{
+	if (o.type != msgpack::type::ARRAY) {
+		std::ostringstream ss;
+		ss << "page unpack: type: " << o.type <<
+			", must be: " << msgpack::type::ARRAY <<
+			", size: " << o.via.array.size;
+		throw std::runtime_error(ss.str());
+	}
+
+	object *p = o.via.array.ptr;
+	const uint32_t size = o.via.array.size;
+	uint16_t version = 0;
+	p[0].convert(&version);
+	switch (version) {
+	case ioremap::greylock::index_meta::serialization_version_1: {
+		if (size != 5) {
+			std::ostringstream ss;
+			ss << "page unpack: array size mismatch: read: " << size << ", must be: 4";
+			throw std::runtime_error(ss.str());
+		}
+
+		unsigned long long tmp;
+
+		p[1].convert(&tmp);
+		meta.page_index = tmp;
+
+		p[2].convert(&tmp);
+		meta.num_pages = tmp;
+
+		p[3].convert(&tmp);
+		meta.num_leaf_pages = tmp;
+
+		p[4].convert(&tmp);
+		meta.generation_number = tmp;
+		break;
+	}
+	default: {
+		std::ostringstream ss;
+		ss << "page unpack: version mismatch: read: " << version <<
+			", must be: < " << ioremap::greylock::page::serialization_version_max;
+		throw std::runtime_error(ss.str());
+	}
+	}
+
+	return meta;
+}
+
+template <typename Stream>
+inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::greylock::index_meta &meta)
+{
+	o.pack_array(5);
+	o.pack((int)ioremap::greylock::index_meta::serialization_version_1);
+	o.pack(meta.page_index.load());
+	o.pack(meta.num_pages.load());
+	o.pack(meta.num_leaf_pages.load());
+	o.pack(meta.generation_number.load());
+
+	return o;
+}
+
+} // namespace msgpack
+
 
 #endif // __INDEXES_INDEX_HPP
