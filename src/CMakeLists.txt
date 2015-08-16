@@ -1,4 +1,4 @@
-add_executable(greylock_test index.cpp)
+add_executable(greylock_test test.cpp)
 target_link_libraries(greylock_test
 	${Boost_LIBRARIES}
 	${ELLIPTICS_LIBRARIES}
