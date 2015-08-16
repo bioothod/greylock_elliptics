@@ -18,12 +18,12 @@ template <typename T>
 class intersector {
 public:
 	intersector(T &t) : m_t(t) {}
-	result intersect(const std::vector<eurl> &greylock) const {
+	result intersect(const std::vector<eurl> &indexes) const {
 		std::string start = std::string("\0");
-		return intersect(greylock, start, INT_MAX);
+		return intersect(indexes, start, INT_MAX);
 	}
 
-	// search for intersections between all @greylock
+	// search for intersections between all @indexes
 	// starting with the key @start, returning at most @num entries
 	//
 	// after @intersect() completes, it sets @start to the next key to start searching from
@@ -34,7 +34,7 @@ public:
 	// after call to this function returns, then intersection is completed.
 	//
 	// @result.completed will be set to true in this case.
-	result intersect(const std::vector<eurl> &greylock, std::string &start, size_t num) const {
+	result intersect(const std::vector<eurl> &indexes, std::string &start, size_t num) const {
 		struct iter {
 			read_only_index<T> idx;
 			greylock::iterator<T> begin, end;
@@ -43,11 +43,13 @@ public:
 				idx(t, name), begin(idx.begin(start)), end(idx.end()) {}
 		};
 		std::vector<iter> idata;
+		// reserve is crucial, since index is non copyable (it has metadata mutex)
+		idata.reserve(indexes.size());
 
-		for_each(greylock.begin(), greylock.end(), [&] (const eurl &name) {
+		for_each(indexes.begin(), indexes.end(), [&] (const eurl &name) {
 				iter it(m_t, name, start);
 
-				idata.emplace_back(it);
+				idata.emplace_back(std::move(it));
 			});
 
 		result res;
@@ -107,11 +109,11 @@ public:
 				auto &min_it = idata[*it].begin;
 				key k = *min_it;
 
-				auto find_it = res.keys.find(greylock[*it]);
+				auto find_it = res.keys.find(indexes[*it]);
 				if (find_it == res.keys.end()) {
 					std::vector<key> kk;
 					kk.emplace_back(k);
-					auto pair = res.keys.insert(std::make_pair(greylock[*it], kk));
+					auto pair = res.keys.insert(std::make_pair(indexes[*it], kk));
 					find_it = pair.first;
 				} else {
 					find_it->second.emplace_back(k);
