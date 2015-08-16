@@ -36,7 +36,7 @@ public:
 	// @result.completed will be set to true in this case.
 	result intersect(const std::vector<eurl> &greylock, std::string &start, size_t num) const {
 		struct iter {
-			index<T> idx;
+			read_only_index<T> idx;
 			greylock::iterator<T> begin, end;
 
 			iter(T &t, const eurl &name, const std::string &start) :

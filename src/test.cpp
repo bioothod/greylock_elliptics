@@ -21,7 +21,7 @@ public:
 		start.key = "test" + elliptics::lexical_cast(rand());
 		start.bucket = m_bucket;
 
-		greylock::index<T> idx(t, start);
+		greylock::read_write_index<T> idx(t, start);
 
 		test::run(this, func(&test::test_remove_some_keys, t, 10000));
 
@@ -50,7 +50,7 @@ private:
 		}
 	}
 
-	void test_insert_many_keys(greylock::index<T> &idx, std::vector<greylock::key> &keys, int max) {
+	void test_insert_many_keys(greylock::read_write_index<T> &idx, std::vector<greylock::key> &keys, int max) {
 		for (int i = 0; i < max; ++i) {
 			greylock::key k;
 
@@ -75,7 +75,7 @@ private:
 		start.key = "remove-test-index." + elliptics::lexical_cast(rand());
 		start.bucket = m_bucket;
 
-		greylock::index<T> idx(t, start);
+		greylock::read_write_index<T> idx(t, start);
 		std::vector<greylock::key> keys;
 
 		for (int i = 0; i < max; ++i) {
@@ -127,7 +127,7 @@ private:
 		name.key = "recovery-test." + elliptics::lexical_cast(rand());
 		name.bucket = m_bucket;
 
-		greylock::index<T> idx(t, name);
+		greylock::read_write_index<T> idx(t, name);
 
 		std::vector<greylock::key> keys;
 
@@ -153,7 +153,7 @@ private:
 		t.set_groups(groups);
 		ribosome::timer tm;
 		// index constructor self-heals itself
-		greylock::index<T> rec(t, name);
+		greylock::read_write_index<T> rec(t, name);
 
 		groups = t.get_groups();
 		std::vector<int> tmp;
@@ -193,7 +193,7 @@ private:
 		t.set_groups(groups);
 	}
 
-	void test_select_many_keys(greylock::index<T> &idx, std::vector<greylock::key> &keys) {
+	void test_select_many_keys(greylock::read_write_index<T> &idx, std::vector<greylock::key> &keys) {
 		for (auto it = keys.begin(); it != keys.end(); ++it) {
 			greylock::key k;
 
@@ -220,7 +220,7 @@ private:
 		}
 	}
 
-	void test_iterator_number(greylock::index<T> &idx, std::vector<greylock::key> &keys) {
+	void test_iterator_number(greylock::read_write_index<T> &idx, std::vector<greylock::key> &keys) {
 		size_t num = 0;
 		for (auto it = idx.begin(), end = idx.end(); it != end; ++it) {
 			dprintf("iterator: %s\n", it->str().c_str());
@@ -234,7 +234,7 @@ private:
 		}
 	}
 
-	void test_page_iterator(greylock::index<T> &idx) {
+	void test_page_iterator(greylock::read_write_index<T> &idx) {
 		size_t page_num = 0;
 		size_t leaf_num = 0;
 		for (auto it = idx.page_begin(), end = idx.page_end(); it != end; ++it) {
@@ -286,7 +286,7 @@ private:
 			url.key = "intersection-index.rand." + elliptics::lexical_cast(i) + "." + elliptics::lexical_cast(rand());
 			greylock.push_back(url);
 
-			greylock::index<T> idx(t, url);
+			greylock::read_write_index<T> idx(t, url);
 
 			for (size_t j = 0; j < different_num; ++j) {
 				greylock::key k;
@@ -454,7 +454,11 @@ int main(int argc, char *argv[])
 
 	if (bnames.size() != 0) {
 		greylock::bucket_transport bt(t.get_node());
-		bt.init(elliptics::parse_groups(groups.c_str()), bnames);
+		if (!bt.init(elliptics::parse_groups(groups.c_str()), bnames)) {
+			std::cerr << "Could not initialize bucket transport, exiting";
+			return -1;
+		}
+
 		bt.test();
 
 		test<greylock::bucket_transport> tt(bt, bnames[0]);

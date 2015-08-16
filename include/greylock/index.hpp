@@ -58,7 +58,7 @@ struct remove_recursion {
 template <typename T>
 class index {
 public:
-	index(T &t, const eurl &sk): m_t(t), m_log(t.logger()), m_sk(sk) {
+	index(T &t, const eurl &sk, bool read_only): m_t(t), m_log(t.logger()), m_sk(sk), m_read_only(read_only) {
 		std::vector<status> meta = m_t.read_all(meta_key());
 
 		struct separate_index_meta {
@@ -87,8 +87,14 @@ public:
 		}
 
 		if (mg.empty()) {
-			start_page_init();
-			return;
+			if (!m_read_only) {
+				start_page_init();
+				return;
+			}
+
+			std::ostringstream ss;
+			ss << "index: could not read index metadata from '" << sk.str() << "'and not allowed to create new index";
+			throw std::runtime_error(ss.str());
 		}
 
 		uint64_t highest_generation_number = 0;
@@ -112,11 +118,22 @@ public:
 		m_t.set_groups(good_groups);
 
 		if (highest_generation_number == 0) {
-			start_page_init();
-			return;
+			if (!m_read_only) {
+				start_page_init();
+				return;
+			}
+
+			std::ostringstream ss;
+			ss << "index: metadata for index '" << sk.str() << "' is corrupted (all generation numbers are zero) "
+				"and not allowed to create new index";
+			throw std::runtime_error(ss.str());
 		}
 
 		if (recovery_groups.empty())
+			return;
+
+		// do not try to recover read-only index
+		if (m_read_only)
 			return;
 
 		size_t pages_recovered = 0;
@@ -147,8 +164,10 @@ public:
 	}
 
 	~index() {
-		// only sync index metadata at destruction time for performance
-		meta_write();
+		if (!m_read_only) {
+			// only sync index metadata at destruction time for performance
+			meta_write();
+		}
 	}
 
 	index_meta meta() const {
@@ -164,24 +183,28 @@ public:
 	}
 
 	int insert(const key &obj) {
+		if (m_read_only)
+			return -EPERM;
+
 		recursion tmp;
 		int ret = insert(m_sk, obj, tmp);
 		if (ret < 0)
 			return ret;
 
 		m_meta.generation_number++;
-
 		return 0;
 	}
 
 	int remove(const key &obj) {
+		if (m_read_only)
+			return -EPERM;
+
 		remove_recursion tmp;
 		int ret = remove(m_sk, obj, tmp);
 		if (ret < 0)
 			return ret;
 
 		m_meta.generation_number++;
-
 		return 0;
 	}
 
@@ -247,6 +270,11 @@ private:
 	T &m_t;
 	const logger &m_log;
 	eurl m_sk;
+
+	// when true, metadata for new index will NOT be created and updated at destruction time
+	// should be TRUE for read-only indexes, for example for indexes created to read metadata
+	// or for search and indexes intersection
+	bool m_read_only;
 
 	index_meta m_meta;
 
@@ -586,6 +614,18 @@ private:
 
 		return 0;
 	}
+};
+
+template<typename T>
+class read_only_index: public index<T> {
+public:
+	read_only_index(T &t, const eurl &start): index<T>(t, start, true) {}
+};
+
+template<typename T>
+class read_write_index: public index<T> {
+public:
+	read_write_index(T &t, const eurl &start): index<T>(t, start, false) {}
 };
 
 }} // namespace ioremap::greylock

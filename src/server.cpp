@@ -459,7 +459,7 @@ public:
 				locker<http_server> l(server(), start.key);
 				std::unique_lock<locker<http_server>> lk(l);
 
-				greylock::index<greylock::bucket_transport> index(*(server()->bucket()), start);
+				greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), start);
 
 				ribosome::timer tm;
 
