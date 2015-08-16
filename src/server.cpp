@@ -67,6 +67,17 @@ public:
 		m_lockers++;
 	}
 
+	bool try_lock(const std::string &key) {
+		size_t h = std::hash<std::string>()(key);
+		std::unique_lock<std::mutex> lock(m_sync_lock);
+		if (m_locks[h % m_lock_num].try_lock()) {
+			m_lockers++;
+			return true;
+		}
+
+		return false;
+	}
+
 	void unlock(const std::string &key) {
 		size_t h = std::hash<std::string>()(key);
 		{
@@ -105,6 +116,10 @@ public:
 
 	void lock() {
 		m_t->lock(m_key);
+	}
+
+	bool try_lock(const std::string &key) {
+		return m_t->try_lock(m_key);
 	}
 
 	void unlock() {
