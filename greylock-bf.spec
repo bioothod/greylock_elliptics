@@ -1,6 +1,6 @@
 Summary:	Greylock is a massively scalable full-text searching/indexing engine
 Name:		greylock
-Version:	0.1.0
+Version:	0.2.0
 Release:	1%{?dist}.1
 
 License:	GPLv2+
@@ -67,6 +67,18 @@ rm -rf %{buildroot}
 #%{_datadir}/greylock/cmake/*
 
 %changelog
+* Mon Aug 17 2015 Evgeniy Polyakov <zbr@ioremap.net> - 0.2.0
+- Updated index metadata
+- Made read-only/read-write indexes
+- Added index metadata reader
+- More logs added
+- Added dockerfile and configs
+- Added search and perf tools
+- Added packaging
+- Renamed to greylock
+- Added bucket selection based on weights
+- Many other changes
+
 * Sat Aug 15 2015 Evgeniy Polyakov <zbr@ioremap.net> - 0.1.0
 - Greylock is a massively scalable full-text searching/indexing engine.
 

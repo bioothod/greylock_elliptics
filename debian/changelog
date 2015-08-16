@@ -1,3 +1,18 @@
+greylock (0.2.0) unstable; urgency=low
+
+  * Updated index metadata
+  * Made read-only/read-write indexes
+  * Added index metadata reader
+  * More logs added
+  * Added dockerfile and configs
+  * Added search and perf tools
+  * Added packaging
+  * Renamed to greylock
+  * Added bucket selection based on weights
+  * Many other changes
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 17 Aug 2015 02:57:26 +0400
+
 greylock (0.1.0) unstable; urgency=low
 
   * Greylock is a massively scalable full-text searching/indexing engine.
