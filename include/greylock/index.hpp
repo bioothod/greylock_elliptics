@@ -88,7 +88,6 @@ public:
 
 		if (mg.empty()) {
 			start_page_init();
-			meta_write();
 			return;
 		}
 
@@ -114,7 +113,6 @@ public:
 
 		if (highest_generation_number == 0) {
 			start_page_init();
-			meta_write();
 			return;
 		}
 
@@ -144,12 +142,12 @@ public:
 		good_groups.insert(good_groups.end(), recovery_groups.begin(), recovery_groups.end());
 		m_t.set_groups(good_groups);
 
-		meta_write();
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: opened: page_index: %ld, groups: %s, pages recovered: %zd",
 				m_meta.page_index, print_groups(good_groups).c_str(), pages_recovered);
 	}
 
 	~index() {
+		// only sync index metadata at destruction time for performance
 		meta_write();
 	}
 
@@ -172,7 +170,6 @@ public:
 			return ret;
 
 		m_meta.generation_number++;
-		meta_write();
 
 		return 0;
 	}
@@ -184,7 +181,6 @@ public:
 			return ret;
 
 		m_meta.generation_number++;
-		meta_write();
 
 		return 0;
 	}
@@ -264,7 +260,11 @@ private:
 	void meta_write() {
 		std::stringstream ss;
 		msgpack::pack(ss, m_meta);
-		m_t.write(meta_key(), ss.str(), true);
+
+		std::string ms = ss.str();
+		m_t.write(meta_key(), ms, true);
+
+		BH_LOG(m_log, INDEXES_LOG_INFO, "index: meta updated: %s, size: %d", m_meta.str().c_str(), ms.size());
 	}
 
 	void start_page_init() {
