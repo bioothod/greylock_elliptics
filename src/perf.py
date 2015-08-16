@@ -23,7 +23,7 @@ class client:
         self.num_indexes = 3000
         self.gen_indexes(self.num_indexes)
 
-        self.max_indexes_per_message = 300
+        self.max_indexes_per_message = 1000
 
     def rand_string(self, ln):
         return ''.join(random.sample(self.sample, ln))
@@ -51,7 +51,7 @@ class client:
 
     def send(self, url, data):
         headers = {}
-        timeout = 10
+        timeout = 100
 
         #print data
 
@@ -81,5 +81,5 @@ if __name__ == '__main__':
             help='Remote URL to send index request')
 
     args = parser.parse_args()
-    c = client(1)
+    c = client(time.time())
     c.test(args.url)
