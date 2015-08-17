@@ -13,17 +13,17 @@ logging.basicConfig(filename='perf.log',
 logging.getLogger().setLevel(logging.INFO)
 
 class client:
-    def __init__(self, seed):
+    def __init__(self, seed, indexes_per_message, num_indexes):
         random.seed(seed)
 
         self.max = 10000000
         self.sample = 'abcdefghijklmnopqrstuvwxyz0123456789.'
 
         self.indexes = []
-        self.num_indexes = 3000
+        self.num_indexes = num_indexes
         self.gen_indexes(self.num_indexes)
 
-        self.max_indexes_per_message = 1000
+        self.max_indexes_per_message = indexes_per_message
 
     def rand_string(self, ln):
         return ''.join(random.sample(self.sample, ln))
@@ -79,7 +79,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Performance tester arguments')
     parser.add_argument('--url', dest='url', action='store', required=True,
             help='Remote URL to send index request')
+    parser.add_argument('--num-indexes', dest='num_indexes', action='store', default=3000,
+            help='Number of pregenerated indexes, every message to be indexed will contain subset of these indexes')
+    parser.add_argument('--indexes-per-message', dest='indexes_per_message', action='store', default=1000,
+            help='Number of random indexes (out of pregenerated max indexes) per message')
+    parser.add_argument('--seed', dest='seed', action='store', default=time.time(),
+            help='Random number generator seed')
 
     args = parser.parse_args()
-    c = client(time.time())
+    c = client(seed = args.seed, indexes_per_message = args.indexes_per_message, num_indexes = args.num_indexes)
     c.test(args.url)
