@@ -37,41 +37,44 @@
 
 using namespace ioremap;
 
+struct lock_entry {
+	lock_entry(bool l): locked(l) {}
+	std::condition_variable cond;
+	int waiting = 0;
+	bool locked = false;
+};
+
+typedef std::unique_ptr<lock_entry> lock_entry_ptr;
+static inline lock_entry_ptr new_lock_entry_ptr(bool l) {
+	return std::unique_ptr<lock_entry>(new lock_entry(l));
+}
+
 class vector_lock {
 public:
-	vector_lock(int num = 1024) {
-		resize(num);
-	}
-
-	void resize(int num) {
-		std::unique_lock<std::mutex> lock(m_sync_lock);
-
-		if (m_lock_num != num) {
-			// must wait for every lock to unlock
-			// otherwise different thread will unlock something we have freed
-			m_sync.wait(lock, [&] {return m_lockers == 0;});
-
-			if (num > m_lock_num) {
-				std::vector<std::mutex> locks(num);
-				m_locks.swap(locks);
-			}
-
-			m_lock_num = num;
-		}
+	vector_lock() {
 	}
 
 	void lock(const std::string &key) {
-		size_t h = std::hash<std::string>()(key);
 		std::unique_lock<std::mutex> lock(m_sync_lock);
-		m_locks[h % m_lock_num].lock();
-		m_lockers++;
+		auto it = m_locks.find(key);
+		if (it == m_locks.end()) {
+			m_locks.emplace(std::pair<std::string, lock_entry_ptr>(key, new_lock_entry_ptr(true)));
+			return;
+		}
+
+		lock_entry_ptr &ptr = it->second;
+
+		ptr->waiting++;
+		ptr->cond.wait(lock, [&] { return ptr->locked == false; });
+		ptr->locked = true;
+		ptr->waiting--;
 	}
 
 	bool try_lock(const std::string &key) {
-		size_t h = std::hash<std::string>()(key);
 		std::unique_lock<std::mutex> lock(m_sync_lock);
-		if (m_locks[h % m_lock_num].try_lock()) {
-			m_lockers++;
+		auto it = m_locks.find(key);
+		if (it == m_locks.end()) {
+			m_locks.emplace(std::pair<std::string, lock_entry_ptr>(key, new_lock_entry_ptr(true)));
 			return true;
 		}
 
@@ -79,23 +82,26 @@ public:
 	}
 
 	void unlock(const std::string &key) {
-		size_t h = std::hash<std::string>()(key);
-		{
-			std::unique_lock<std::mutex> lock(m_sync_lock);
-			m_locks[h % m_lock_num].unlock();
-			m_lockers--;
+		std::unique_lock<std::mutex> lock(m_sync_lock);
+		auto it = m_locks.find(key);
+		if (it == m_locks.end()) {
+			throw std::runtime_error(key + ": trying to unlock key which is not locked");
 		}
 
-		m_sync.notify_all();
+		lock_entry_ptr &ptr = it->second;
+
+		ptr->locked = false;
+		if (ptr->waiting != 0) {
+			ptr->cond.notify_one();
+			return;
+		}
+
+		m_locks.erase(it);
 	}
 
 private:
 	std::mutex m_sync_lock;
-	std::condition_variable m_sync;
-
-	int m_lock_num = 0;
-	int m_lockers = 0;
-	std::vector<std::mutex> m_locks;
+	std::map<std::string, lock_entry_ptr> m_locks;
 };
 
 template <typename T>
@@ -665,13 +671,6 @@ private:
 	}
 
 	bool greylock_init(const rapidjson::Value &config) {
-		if (config.HasMember("lock-num")) {
-			auto &ln = config["lock-num"];
-			if (ln.IsNumber()) {
-				m_lock.resize(ln.GetInt());
-			}
-		}
-
 		if (config.HasMember("max-page-size")) {
 			auto &ps = config["max-page-size"];
 			if (ps.IsNumber())
