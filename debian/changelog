@@ -1,3 +1,10 @@
+greylock (0.2.1) unstable; urgency=low
+
+  * http: reworked vector_lock, now its based on a tree of condition variables
+  * perf: added several indexes and seed command line arguments
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 17 Aug 2015 15:22:17 +0400
+
 greylock (0.2.0) unstable; urgency=low
 
   * Updated index metadata
