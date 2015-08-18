@@ -7,7 +7,7 @@
 namespace ioremap { namespace greylock {
 
 static size_t max_page_size = 6144;
-static size_t default_reserve_size = max_page_size * 1.5;
+static size_t default_reserve_size = max_page_size;
 
 #define dprintf(fmt, a...) do {} while (0)
 //#define dprintf(fmt, a...) printf(fmt, ##a)
