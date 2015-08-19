@@ -314,7 +314,7 @@ private:
 
 					if (size != it->second.size() || size != same_num) {
 						std::ostringstream ss;
-						ss << "intersection failed: greylock: " << res.keys.size() <<
+						ss << "intersection failed: indexes: " << res.keys.size() <<
 							", same keys in each index: " << same_num <<
 							", current-index: " << it->first.str() <<
 							", found keys (must be equal to the same jeys in each index): " << it->second.size();
@@ -332,7 +332,7 @@ private:
 
 						if (k != it->second[i]) {
 							std::ostringstream ss;
-							ss << "intersection failed: greylock: " << res.keys.size() <<
+							ss << "intersection failed: indexes: " << res.keys.size() <<
 								", same keys in each index: " << same_num <<
 								", current-index: " << it->first.str() <<
 								", mismatch position: " << i <<
@@ -355,7 +355,7 @@ private:
 			}
 		}
 
-		printf("intersection: greylock: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
+		printf("intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
 				num_greylock, res.keys.size(), same_num, same_num + different_num, tm.restart());
 
 		index_checker c(res, same_num);
@@ -390,11 +390,11 @@ private:
 				break;
 		}
 
-		printf("paginated intersection: greylock: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
+		printf("paginated intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
 				num_greylock, num_found, same_num, same_num + different_num, tm.restart());
 		if (num_found != same_num) {
 			std::ostringstream ss;
-			ss << "paginated intersection failed: greylock: " << num_greylock << ", same keys in each index: " << same_num <<
+			ss << "paginated intersection failed: indexes: " << num_greylock << ", same keys in each index: " << same_num <<
 				", found keys: " << num_found <<
 				", total keys in each index: " << different_num + same_num;
 			throw std::runtime_error(ss.str());
