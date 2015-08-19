@@ -54,12 +54,11 @@ struct index_meta {
 	std::atomic<unsigned long long> generation_number_nsec;
 
 	void update_generation_number() {
-		struct timeval tv;
+		struct timespec ts;
+		clock_gettime(CLOCK_REALTIME, &ts);
 
-		gettimeofday(&tv, NULL);
-
-		generation_number_sec = tv.tv_sec;
-		generation_number_nsec = tv.tv_usec * 1000;
+		generation_number_sec = ts.tv_sec;
+		generation_number_nsec = ts.tv_nsec;
 	}
 
 	bool operator != (const index_meta &other) const {
