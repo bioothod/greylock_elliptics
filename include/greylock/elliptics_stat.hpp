@@ -2,78 +2,11 @@
 #define __INDEXES_STAT_HPP
 
 #include "greylock/error.hpp"
+#include "greylock/json.hpp"
 
 #include <elliptics/session.hpp>
 
-#include <thevoid/rapidjson/document.h>
-
 namespace ioremap { namespace greylock {
-static inline const char *get_string(const rapidjson::Value &entry, const char *name, const char *def = NULL) {
-	if (entry.HasMember(name)) {
-		const rapidjson::Value &v = entry[name];
-		if (v.IsString()) {
-			return v.GetString();
-		}
-	}
-
-	return def;
-}
-
-static inline int64_t get_int64(const rapidjson::Value &entry, const char *name, int64_t def = -1) {
-	if (entry.HasMember(name)) {
-		const rapidjson::Value &v = entry[name];
-		if (v.IsInt()) {
-			return v.GetInt();
-		}
-		if (v.IsUint()) {
-			return v.GetUint();
-		}
-		if (v.IsInt64()) {
-			return v.GetInt64();
-		}
-		if (v.IsUint()) {
-			return v.GetUint64();
-		}
-	}
-
-	return def;
-}
-
-static inline const rapidjson::Value &get_object(const rapidjson::Value &entry, const char *name,
-		const rapidjson::Value &def = rapidjson::Value()) {
-	if (entry.HasMember(name)) {
-		const rapidjson::Value &v = entry[name];
-
-		if (v.IsObject())
-			return v;
-	}
-
-	return def;
-}
-
-static inline const rapidjson::Value &get_array(const rapidjson::Value &entry, const char *name,
-		const rapidjson::Value &def = rapidjson::Value()) {
-	if (entry.HasMember(name)) {
-		const rapidjson::Value &v = entry[name];
-
-		if (v.IsArray())
-			return v;
-	}
-
-	return def;
-}
-
-static inline bool get_bool(const rapidjson::Value &entry, const char *name, bool def = true) {
-	if (entry.HasMember(name)) {
-		const rapidjson::Value &v = entry[name];
-
-		if (v.IsBool())
-			return v.GetBool();
-	}
-
-	return def;
-}
-
 // weight calculation limits
 //
 // Metric in question is not allowed to be less than @hard limit and
@@ -148,51 +81,54 @@ struct backend_stat {
 	}
 
 	void fill_vfs_stats(const rapidjson::Value &vstat) {
-		uint64_t blocks = get_int64(vstat, "blocks");
-		uint64_t bsize = get_int64(vstat, "bsize");
+		uint64_t blocks = get_int64(vstat, "blocks", 0);
+		uint64_t bsize = get_int64(vstat, "bsize", 0);
 
-		vfs.total = get_int64(vstat, "frsize") * blocks;
-		vfs.avail = get_int64(vstat, "bfree") * bsize;
+		vfs.total = get_int64(vstat, "frsize", 0) * blocks;
+		vfs.avail = get_int64(vstat, "bfree", 0) * bsize;
 	}
 
-	void fill_raw_stats(elliptics::logger &log, const rapidjson::Value &backend) {
+	bool fill_raw_stats(elliptics::logger &log, const rapidjson::Value &backend) {
 		const rapidjson::Value &summary = get_object(backend, "summary_stats");
 		if (!summary.IsObject()) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'summary_stats' object",
 					dnet_addr_string(&addr), backend_id);
-			return;
+			return false;
 		}
+
 
 		const rapidjson::Value &config = get_object(backend, "config");
 		if (!config.IsObject()) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'config' object",
 					dnet_addr_string(&addr), backend_id);
-			return;
+			return false;
 		}
-		uint64_t config_flags = get_int64(config, "blob_flags");
 
 		group = get_int64(config, "group");
 		if (group < 0) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'group' field",
 					dnet_addr_string(&addr), backend_id);
-			return;
+			return false;
 		}
 
-		const rapidjson::Value &vstat = get_object(backend, "config");
+
+		const rapidjson::Value &vstat = get_object(backend, "vfs");
 		if (!vstat.IsObject()) {
 			BH_LOG(log, DNET_LOG_ERROR,
 				"stat: fill_raw_stats: addr: %s, backend_id: %d, json logic error: invalid 'vfs' object",
 					dnet_addr_string(&addr), backend_id);
-			return;
+			return false;
 		}
 
 		fill_vfs_stats(vstat);
 
 		size.limit = get_int64(config, "blob_size_limit", 0);
 
+
+		uint64_t config_flags = get_int64(config, "blob_flags", 0);
 		// if there is eblob flag 'no size check' or there is no @blob_size_limit option,
 		// use total available disk space as size limit
 		if ((size.limit == 0) || (config_flags & (1<<4))) {
@@ -211,7 +147,23 @@ struct backend_stat {
 			level = DNET_LOG_ERROR;
 		}
 
+		if (size.limit <= size.used) {
+			BH_LOG(log, DNET_LOG_ERROR,
+				"stat: fill_raw_stats: addr: %s, backend_id: %d, size.limit <= size.used: %s",
+					dnet_addr_string(&addr), backend_id, str().c_str());
+			return false;
+		}
+
+		if (records.total < records.removed) {
+			BH_LOG(log, DNET_LOG_ERROR,
+				"stat: fill_raw_stats: addr: %s, backend_id: %d, records.total < records.removed: %s",
+					dnet_addr_string(&addr), backend_id, str().c_str());
+			return false;
+		}
+
+
 		BH_LOG(log, level, "stat: fill_raw_stats: %s", str().c_str());
+		return true;
 	}
 };
 
@@ -327,7 +279,12 @@ private:
 					continue;
 				}
 
-				b.fill_raw_stats(log, raw_backend);
+				if (!b.fill_raw_stats(log, raw_backend)) {
+					BH_LOG(log, DNET_LOG_ERROR,
+						"stat: update_completion: addr: %s, backend_id: %d: invalid statistics",
+							dnet_addr_string(addr), b.backend_id);
+					continue;
+				}
 
 				if (b.group > 0)
 					gstat[b.group] = std::move(b);
