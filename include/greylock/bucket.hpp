@@ -138,7 +138,7 @@ public:
 	}
 
 	bool valid() const {
-		return m_valid;
+		return m_valid && m_stat.backends.size() != 0;
 	}
 
 	std::string name() const {
@@ -708,13 +708,11 @@ private:
 		for (auto it = buckets.begin(), end = buckets.end(); it != end; ++it) {
 			it->second->wait_for_reload();
 
-			if (it->second->valid()) {
-				bucket_meta meta = it->second->meta();
-				for (auto g = meta.groups.begin(), gend = meta.groups.end(); g != gend; ++g) {
-					backend_stat bs = m_stat.stat(*g);
-					if (bs.group == *g) {
-						it->second->set_backend_stat(*g, bs);
-					}
+			bucket_meta meta = it->second->meta();
+			for (auto g = meta.groups.begin(), gend = meta.groups.end(); g != gend; ++g) {
+				backend_stat bs = m_stat.stat(*g);
+				if (bs.group == *g) {
+					it->second->set_backend_stat(*g, bs);
 				}
 			}
 
