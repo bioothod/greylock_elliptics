@@ -10,6 +10,9 @@ namespace ioremap { namespace greylock {
 struct key {
 	std::string id;
 	eurl url;
+	std::vector<size_t> positions;
+
+	MSGPACK_DEFINE(id, url, positions);
 
 	size_t size() const {
 		return id.size() + url.size();
@@ -38,8 +41,6 @@ struct key {
 	std::string str() const {
 		return id + ":" + url.str();
 	}
-
-	MSGPACK_DEFINE(id, url);
 };
 
 
