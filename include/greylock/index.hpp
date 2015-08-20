@@ -409,7 +409,7 @@ private:
 					page_key.str().c_str(), p.str().c_str(),
 					found_pos);
 
-				// this is not a leaf node, but there is no leaf in @objects
+				// this is not a leaf node, but there is no leaf in @obj.objects
 				// this is the only reason non-leaf page search failed,
 				// thus create new leaf node
 				//
@@ -580,7 +580,9 @@ private:
 			return -ENOENT;
 		}
 
-		key &found = p.objects[found_pos];
+		// we must copy key, since if it is leaf page and it is the last key in the page,
+		// page will be resized and last key content will be overwritten with STL internal data
+		key found = p.objects[found_pos];
 
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: page: %s -> %s, found_pos: %d, found_key: %s",
 			obj.str().c_str(),
