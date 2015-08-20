@@ -90,21 +90,35 @@ private:
 			k.url.key = std::string(buf);
 			k.url.bucket = m_bucket;
 
-			idx.insert(k);
+			int err = idx.insert(k);
+			if (err < 0) {
+				printf("remote-test: failed to insert key: %s: %d\n", k.str().c_str(), err);
+				std::ostringstream ss;
+				ss << "failed to insert key: " << k.str() << ": " << err;
+				throw std::runtime_error(ss.str());
+			}
 			keys.push_back(k);
 		}
 
 		ribosome::timer tm;
 		printf("remove-test: meta before remove: %s\n", idx.meta().str().c_str());
-		for (auto it = keys.begin(), end = keys.begin() + keys.size() / 2; it != end; ++it) {
-			idx.remove(*it);
+		int del_num = keys.size() / 2;
+		for (auto it = keys.begin(), end = keys.begin() + del_num; it != end; ++it) {
+			int err = idx.remove(*it);
+			if (err < 0) {
+				printf("remote-test: failed to remove key: %s: %d\n", it->str().c_str(), err);
+				std::ostringstream ss;
+				ss << "failed to remove key: " << it->str() << ": " << err;
+				throw std::runtime_error(ss.str());
+			}
 		}
 		printf("remove-test: meta after remove: %s, removed entries: %zd, time: %ld ms\n",
 				idx.meta().str().c_str(), keys.size() / 2, tm.elapsed());
 
+		int pos = 0;
 		for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
 			greylock::key found = idx.search(*it);
-			if (it < keys.begin() + keys.size() / 2) {
+			if (pos < del_num) {
 				if (found) {
 					std::ostringstream ss;
 					ss << "key: " << it->str() << " has been found, but it was removed";
@@ -117,6 +131,8 @@ private:
 					throw std::runtime_error(ss.str());
 				}
 			}
+
+			++pos;
 		}
 	}
 
