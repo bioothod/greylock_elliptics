@@ -39,13 +39,24 @@ class client:
         return random.sample(self.indexes, self.max_indexes_per_message)
 
     def format_elliptics(self):
+
+        indexes = []
+        pos = 0
+        for idx in self.get_indexes():
+            i = {}
+            i['name'] = idx
+            i['positions'] = pos
+            pos += 1
+
+            indexes.append(i)
+
         raw = {}
         raw['id'] = self.msg_id()
         raw['bucket'] = ""
         raw['key'] = ""
+        raw['indexes'] = indexes
 
         msg = {}
-        msg['indexes'] = self.get_indexes()
         msg['ids'] = [raw]
         return json.dumps(msg, encoding='utf8', ensure_ascii=False)
 

@@ -3,6 +3,7 @@
 #include "greylock/core.hpp"
 #include "greylock/index.hpp"
 #include "greylock/intersection.hpp"
+#include "greylock/json.hpp"
 
 
 #include <elliptics/session.hpp>
@@ -280,62 +281,80 @@ public:
 
 			std::vector<greylock::eurl> raw_greylock(raw_greylock_set.begin(), raw_greylock_set.end());
 
-			std::vector<greylock::key> result;
-			bool completed = true;
-
+			greylock::intersect::result result;
+			result.cookie = page_start;
+			result.max_number_of_documents = page_num;
 
 			ILOG_INFO("url: %s: starting intersection, json parsing duration: %d ms",
 					req.url().to_human_readable().c_str(), search_tm.elapsed());
 
-			completed = intersect(req, raw_greylock, page_start, page_num, result);
+			intersect(req, raw_greylock, result);
 
+			const rapidjson::Value &match = greylock::get_object(doc, "match");
+			if (match.IsObject()) {
+				const char *match_type = greylock::get_string(match, "type");
+				if (match_type) {
+					if (strcmp(match_type, "and")) {
+					} else if (strcmp(match_type, "phrase")) {
+					}
+				}
+			}
+
+			send_search_result(result);
+
+			ILOG_INFO("url: %s: requested indexes: %d, requested number of documents: %d, search start: %s, "
+					"found documents: %d, cookie: %s, completed: %d, duration: %d ms",
+					req.url().to_human_readable().c_str(), idxs.Size(), page_num, page_start.c_str(),
+					result.docs.size(), result.cookie.c_str(), result.completed, search_tm.elapsed());
+		}
+
+		void send_search_result(const greylock::intersect::result &result) {
 			JsonValue ret;
 			auto &allocator = ret.GetAllocator();
 
 			rapidjson::Value ids(rapidjson::kArrayType);
-			for (auto it = result.begin(), end = result.end(); it != end; ++it) {
+			for (auto it = result.docs.begin(), end = result.docs.end(); it != end; ++it) {
 				rapidjson::Value key(rapidjson::kObjectType);
 
-				rapidjson::Value kv(it->url.key.c_str(), it->url.key.size(), allocator);
+				const greylock::key &doc = it->doc;
+
+				rapidjson::Value kv(doc.url.key.c_str(), doc.url.key.size(), allocator);
 				key.AddMember("key", kv, allocator);
 
-				rapidjson::Value bv(it->url.bucket.c_str(), it->url.bucket.size(), allocator);
+				rapidjson::Value bv(doc.url.bucket.c_str(), doc.url.bucket.size(), allocator);
 				key.AddMember("bucket", bv, allocator);
 
-				rapidjson::Value idv(it->id.c_str(), it->id.size(), allocator);
+				rapidjson::Value idv(doc.id.c_str(), doc.id.size(), allocator);
 				key.AddMember("id", idv, allocator);
 
 				ids.PushBack(key, allocator);
 			}
 
 			ret.AddMember("ids", ids, allocator);
-			ret.AddMember("completed", completed, allocator);
+			ret.AddMember("completed", result.completed, allocator);
 
-			rapidjson::Value page(rapidjson::kObjectType);
-			page.AddMember("num", result.size(), allocator);
+			{
+				rapidjson::Value page(rapidjson::kObjectType);
+				page.AddMember("num", result.docs.size(), allocator);
 
-			rapidjson::Value sv(page_start.c_str(), page_start.size(), allocator);
-			page.AddMember("start", sv, allocator);
+				rapidjson::Value sv(result.cookie.c_str(), result.cookie.size(), allocator);
+				page.AddMember("start", sv, allocator);
 
-			ret.AddMember("paging", page, allocator);
+				ret.AddMember("paging", page, allocator);
+			}
 
-			data = ret.ToString();
+			std::string data = ret.ToString();
 
 			thevoid::http_response reply;
 			reply.set_code(swarm::http_response::ok);
 			reply.headers().set_content_type("text/json; charset=utf-8");
 			reply.headers().set_content_length(data.size());
 
-			ILOG_INFO("url: %s: found ids: %d, requested ids: %d, start: %s, completed: %d, duration: %d ms",
-					req.url().to_human_readable().c_str(),
-					ids.Size(), page_num, page_start.c_str(), completed,
-					search_tm.elapsed());
-
 			this->send_reply(std::move(reply), std::move(data));
 		}
 
 		bool intersect(const thevoid::http_request &req, const std::vector<greylock::eurl> &raw_greylock,
-				std::string &page_start, int page_num, std::vector<greylock::key> &result) {
+				greylock::intersect::result &result) {
 			ribosome::timer tm;
 
 			greylock::intersect::intersector<greylock::bucket_transport> p(*(server()->bucket()));
@@ -348,7 +367,7 @@ public:
 			std::vector<std::unique_lock<locker<http_server>>> locks;
 			locks.reserve(raw_greylock.size());
 			for (auto it = raw_greylock.begin(), end = raw_greylock.end(); it != end; ++it) {
-				locker<http_server> l(server(), it->key);
+				locker<http_server> l(server(), it->str());
 				lockers.emplace_back(std::move(l));
 
 				std::unique_lock<locker<http_server>> lk(lockers.back());
@@ -361,25 +380,122 @@ public:
 					tm.elapsed());
 
 			ribosome::timer intersect_tm;
-			greylock::intersect::result res = p.intersect(raw_greylock, page_start, page_num);
-
-			if (res.keys.size()) {
-				auto &v = res.keys.begin()->second;
-				result.swap(v);
-			}
+			result = p.intersect(raw_greylock, result.cookie, result.max_number_of_documents);
 
 			ILOG_INFO("url: %s: locks: %d: completed: %d, result keys: %d, requested num: %d, page start: %s: "
 					"intersection completed: duration: %d ms, whole duration: %d ms",
 					req.url().to_human_readable().c_str(),
-					raw_greylock.size(), res.completed, result.size(),
-					page_num, page_start.c_str(),
+					raw_greylock.size(), result.completed, result.docs.size(),
+					result.max_number_of_documents, result.cookie.c_str(),
 					intersect_tm.elapsed(), tm.elapsed());
 
-			return res.completed;
+			return result.completed;
 		}
 	};
 
 	struct on_index : public thevoid::simple_request_stream<http_server> {
+		void insert_one_key(const thevoid::http_request &req, greylock::key &doc, const rapidjson::Value &idxs) {
+			ribosome::timer all_tm;
+
+			ILOG_INFO("insert_one_key: url: %s, doc: %s, indexes: %d: start insertion",
+					req.url().to_human_readable().c_str(),
+					doc.str().c_str(), idxs.Size());
+
+			int idx_pos = 0;
+			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
+				ribosome::timer tm;
+
+				if (!idx->IsObject())
+					continue;
+
+				// for every index we put vector of positions where given index is located in the document
+				// since it is an inverted index, it contains list of document links each of which contains
+				// array of the positions, where given index lives in the document
+				doc.positions.clear();
+				const rapidjson::Value &pos = greylock::get_array(*idx, "positions");
+				if (pos.IsArray()) {
+					for (auto p = pos.Begin(), pend = pos.End(); p != pend; ++p) {
+						if (p->IsInt()) {
+							doc.positions.push_back(p->GetInt());
+						} else if (p->IsUint()) {
+							doc.positions.push_back(p->GetUint());
+						} else if (p->IsInt64()) {
+							doc.positions.push_back(p->GetInt64());
+						} else if (p->IsUint64()) {
+							doc.positions.push_back(p->GetUint64());
+						}
+					}
+				}
+
+				const char *name = greylock::get_string(*idx, "name");
+				if (!name)
+					continue;
+
+				greylock::eurl start;
+				start.bucket.assign(server()->meta_bucket_name());
+				start.key.assign(name);
+
+				locker<http_server> l(server(), start.str());
+				std::unique_lock<locker<http_server>> lk(l);
+
+				greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), start);
+
+				int err = index.insert(doc);
+				if (err < 0) {
+					ILOG_ERROR("insert_one_key: url: %s, doc: %s, index: %s error: %d: could not insert new key",
+						req.url().to_human_readable().c_str(),
+						doc.str().c_str(),
+						start.str().c_str(),
+						err);
+					this->send_reply(swarm::http_response::internal_server_error);
+					return;
+				}
+
+				ILOG_INFO("insert_one_key: url: %s, doc: %s, index: %s, index position: %d/%d, elapsed time: %d ms",
+					req.url().to_human_readable().c_str(),
+					doc.str().c_str(),
+					start.str().c_str(),
+					idx_pos, idxs.Size(),
+					tm.elapsed());
+
+				idx_pos++;
+			}
+
+			ILOG_INFO("insert_one_key: url: %s, doc: %s, indexes: %d: successfully inserded, elapsed time: %d ms",
+					req.url().to_human_readable().c_str(),
+					doc.str().c_str(), idxs.Size(), all_tm.elapsed());
+		}
+
+		void parse_ids(const thevoid::http_request &req, const rapidjson::Value &ids) {
+			for (auto it = ids.Begin(), id_end = ids.End(); it != id_end; ++it) {
+				if (it->IsObject()) {
+					greylock::key doc;
+
+					const char *bucket = greylock::get_string(*it, "bucket");
+					const char *key = greylock::get_string(*it, "key");
+					const char *id = greylock::get_string(*it, "id");
+					if (!bucket || !key || !id) {
+						ILOG_ERROR("parse_ids: url: %s, error: %d: 'ids/{bucket,ket,id} must be strings",
+								req.url().to_human_readable().c_str(), -EINVAL);
+						continue;
+					}
+
+					doc.url.bucket.assign(bucket);
+					doc.url.key.assign(key);
+					doc.id.assign(id);
+
+					const rapidjson::Value &idxs = greylock::get_array(*it, "indexes");
+					if (!idxs.IsArray()) {
+						ILOG_ERROR("parse_ids: url: %s, error: %d: 'ids/indexes' must be array",
+								req.url().to_human_readable().c_str(), -EINVAL);
+						continue;
+					}
+
+					insert_one_key(req, doc, idxs);
+				}
+			}
+		}
+
 		virtual void on_request(const thevoid::http_request &req, const boost::asio::const_buffer &buffer) {
 			ribosome::timer index_tm;
 			ILOG_INFO("url: %s: start", req.url().to_human_readable().c_str());
@@ -390,116 +506,19 @@ public:
 			rapidjson::Document doc;
 			doc.Parse<0>(data.c_str());
 
-			if (!doc.HasMember("ids")) {
-				ILOG_ERROR("url: %s, error: %d: there is no 'ids' member", req.url().to_human_readable().c_str(), -EINVAL);
-				this->send_reply(swarm::http_response::bad_request);
-				return;
-			}
-
-			if (!doc.HasMember("indexes")) {
-				ILOG_ERROR("url: %s, error: %d: there is no 'indexes' member", req.url().to_human_readable().c_str(), -EINVAL);
-				this->send_reply(swarm::http_response::bad_request);
-				return;
-			}
-
-
-			const auto &ids = doc["ids"];
-			const auto &idxs = doc["indexes"];
-
+			const rapidjson::Value &ids = greylock::get_array(doc, "ids");
 			if (!ids.IsArray()) {
-				ILOG_ERROR("url: %s, error: %d: 'ids' must be array", req.url().to_human_readable().c_str(), -EINVAL);
+				ILOG_ERROR("on_request: url: %s, error: %d: 'ids' must be array",
+						req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
-			if (!idxs.IsArray()) {
-				ILOG_ERROR("url: %s, error: %d: 'indexes' must be array", req.url().to_human_readable().c_str(), -EINVAL);
-				this->send_reply(swarm::http_response::bad_request);
-				return;
-			}
+			parse_ids(req, ids);
 
-
-			std::vector<greylock::key> keys;
-			for (auto it = ids.Begin(), id_end = ids.End(); it != id_end; ++it) {
-				if (it->IsObject()) {
-					greylock::key k;
-
-					if (!it->HasMember("key"))
-						continue;
-					if (!it->HasMember("bucket"))
-						continue;
-					if (!it->HasMember("id"))
-						continue;
-
-					const auto &jid = (*it)["id"];
-					const auto &jb = (*it)["bucket"];
-					const auto &jk = (*it)["key"];
-
-					if (!jid.IsString() || !jb.IsString() || !jk.IsString())
-						continue;
-
-					k.url.bucket = jb.GetString();
-					k.url.key = jk.GetString();
-					k.id = jid.GetString();
-
-					keys.emplace_back(k);
-				}
-			}
-
-			ILOG_INFO("url: %s, keys: %d, indexes: %d: start insertion",
+			ILOG_INFO("on_request: url: %s, keys: %d: insertion completed, index duration: %d ms",
 					req.url().to_human_readable().c_str(),
-					keys.size(), idxs.Size());
-
-			ribosome::timer all_tm;
-			int idx_pos = 0;
-			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
-				all_tm.restart();
-
-				if (!idx->IsString())
-					continue;
-
-				greylock::eurl start;
-				start.bucket = server()->meta_bucket_name();
-				start.key = idx->GetString();
-
-				locker<http_server> l(server(), start.key);
-				std::unique_lock<locker<http_server>> lk(l);
-
-				greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), start);
-
-				ribosome::timer tm;
-
-				int pos = 0;
-				for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
-					tm.restart();
-
-					int err = index.insert(*it);
-					if (err < 0) {
-						ILOG_ERROR("url: %s, index: %s, key: %s, error: %d: could not insert new key",
-							req.url().to_human_readable().c_str(), start.str().c_str(),
-							it->str().c_str(), err);
-						this->send_reply(swarm::http_response::internal_server_error);
-						return;
-					}
-
-					ILOG_INFO("url: %s, index: %s, keys: %d/%d, key: %s: inserted new key, duration: %d ms",
-						req.url().to_human_readable().c_str(), start.str().c_str(),
-						pos, keys.size(),
-						it->str().c_str(), tm.elapsed());
-
-					pos++;
-				}
-
-				ILOG_INFO("url: %s, index: %s, keys: %d, idx: %d/%d: inserted all keys, duration: %d ms",
-					req.url().to_human_readable().c_str(), start.str().c_str(),
-					keys.size(), idx_pos, idxs.Size(), all_tm.elapsed());
-
-				idx_pos++;
-			}
-
-			ILOG_INFO("url: %s, keys: %d, indexes: %d: completed, index duration: %d ms",
-					req.url().to_human_readable().c_str(),
-					keys.size(), idxs.Size(), index_tm.elapsed());
+					ids.Size(), index_tm.elapsed());
 			this->send_reply(thevoid::http_response::ok);
 		}
 	};
@@ -595,7 +614,7 @@ private:
 				return false;
 			}
 		} catch (const std::exception &e) {
-			ILOG_ERROR("Could not add any out of %zd nodes.", remotes.size());
+			ILOG_ERROR("Could not add any out of %d nodes.", remotes.size());
 			return false;
 		}
 

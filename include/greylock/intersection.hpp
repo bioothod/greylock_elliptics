@@ -6,12 +6,32 @@
 #include <map>
 
 namespace ioremap { namespace greylock { namespace intersect {
+
+struct single_doc_result {
+	// how to get the document
+	// document name lives in @id
+	// @bucket/@key pair contains elliptics credentials to read the doc (if was specified at insertion time)
+	key doc;
+
+	// every entry in this array corresponds to one of the requested index name,
+	// array size will always be equal to requested number of indexes
+	//
+	// each key contains index name and how to find it (index's @bucket/@key, @id contains index name)
+	// as well as vector of positions where given index name is being located in the document
+	std::vector<key> indexes;
+};
+
 struct result {
 	bool completed = false;
 
-	// index name (eurl) -> set of keys from that index which match other greylock
-	// key IDs will be the same, but key data (url) can be different
-	std::map<eurl, std::vector<key>> keys;
+	// This will contain a cookie which must be used for the next intersection request,
+	// if current request is not complete. This may happen when client has requested limited
+	// maximum number of keys in reply and there are more keys.
+	std::string cookie;
+	long max_number_of_documents = ~0UL;
+
+	// array of documents which contain all requested indexes
+	std::vector<single_doc_result> docs;
 };
 
 template <typename T>
@@ -42,8 +62,11 @@ public:
 			iter(T &t, const eurl &name, const std::string &start) :
 				idx(t, name), begin(idx.begin(start)), end(idx.end()) {}
 		};
+
+		// contains vector of iterators pointing to the requested indexes
+		// iterator always points to the smallest document ID not yet pushed into resulting structure (or to client)
+		// or discarded (if other index iterators point to larger document IDs)
 		std::vector<iter> idata;
-		// reserve is crucial, since index is non copyable (it has metadata mutex)
 		idata.reserve(indexes.size());
 
 		for_each(indexes.begin(), indexes.end(), [&] (const eurl &name) {
@@ -55,6 +78,79 @@ public:
 		result res;
 
 		while (!res.completed) {
+			// contains indexes within @idata array of iterators,
+			// each iterator contains the same and smallest to the known moment reference to the document (i.e. document ID)
+			//
+			// if checking @idata array yelds smaller document ID than that in iterators referenced in @pos,
+			// then we clear @pos and starts pushing the new smallest iterator indexes
+			//
+			// we could break out of the @idata processing, increase the smallest pointing iterator and start over,
+			// but we optimize @idata processing - if there are other iterators in @idata which equal to the smallest
+			// iterator value (document ID), we put them into @pos
+			// Since @pos doesn't contain all indexes (its size doesn't equal to the size of @idata), we will increase
+			// all iterators where we have found the smallest document ID, hopefully they will point to the new document ID,
+			// which might be the same for all iterator among @idata and thus we will push this document ID to the result
+			// structure returned to the client
+			//
+			// Here is an example:
+			//
+			// 1. @idata iterators	0	1	2	3
+			//                      -------------------------
+			// document ids		d0	d2	d3	d3
+			// 			d2	d3	d4	d4
+			// 			d3	d4	d5	d5
+			// 			d4	-	-	-
+			// 			d5	-	-	-
+			//
+			// We start from the top of this table, i.e. row after 'document ids' string
+			// @pos will contain following values during iteration over @idata iterators
+			// 	0 - select the first value
+			// 	0 - skip iterator 1 (d2 document id) since its value is greater than that 0'th iterator value (d0)
+			// 	0 - skip iterator 2
+			// 	0 - skip iterator 3
+			//
+			// @pos contains only 0 index, it is not equal to the size of @idata (4), thus we have to increase 0'th iterator
+			// discarding its first value
+			//
+			// 2. @idata iterators	0	1	2	3
+			//                      -------------------------
+			// document ids		d2	d2	d3	d3
+			// 			d3	d3	d4	d4
+			// 			d4	d4	d5	d5
+			// 			d5	-	-	-
+			// @pos:
+			// 	0 - select the first iterator
+			// 	0 1 - 1'th iterator value equals to the value of the 0'th iterator, append it to the array
+			// 	0 1 - 2'th iterator value (d3) is greater than that of the 0'th iterator (d2)
+			// 	0 1 - the same as above
+			// since size of the @pos is not equal to the size of @idata we increment all iterators which are indexed in @pos
+			//
+			// 3. @idata iterators	0	1	2	3
+			//                      -------------------------
+			// document ids		d3	d3	d3	d3
+			// 			d4	d4	d4	d4
+			// 			d5	-	d5	d5
+			// @pos will contain all 4 indexes, since all iterator's value are the same (d3)
+			// We will increment all iterators and push d3 into resulting array which will be returned to the client,
+			// since size of the @pos array equals to the @idata size
+			//
+			// 4. @idata iterators	0	1	2	3
+			//                      -------------------------
+			// document ids		d4	d4	d4	d4
+			// 			d5	-	d5	d5
+			// We put d4 into resulting array and increment all iterators as above
+			//
+			// 5. @idata iterators	0	1	2	3
+			//                      -------------------------
+			// document ids		d5	-	d5	d5
+			//
+			// @pos:
+			// 	0 - select the first iterator
+			// 	Stop processing, since 1'th iterator is empty. This means no further iteration checks can contain all 4 the same
+			// 	value, thus it is not possible to find any other document with higher ID which will contain all 4 requested
+			// 	indexes.
+			//
+			// 6. Return [d3, d4] values to the client
 			std::vector<int> pos;
 
 			int current = -1;
@@ -101,26 +197,30 @@ public:
 			}
 
 			start = idata[pos[0]].begin->id;
-			if (res.keys.begin()->second.size() == num) {
+			if (res.docs.size() == num) {
 				break;
 			}
 
+			single_doc_result rs;
 			for (auto it = pos.begin(); it != pos.end(); ++it) {
 				auto &min_it = idata[*it].begin;
 				key k = *min_it;
 
-				auto find_it = res.keys.find(indexes[*it]);
-				if (find_it == res.keys.end()) {
-					std::vector<key> kk;
-					kk.emplace_back(k);
-					auto pair = res.keys.insert(std::make_pair(indexes[*it], kk));
-					find_it = pair.first;
-				} else {
-					find_it->second.emplace_back(k);
+				if (it == pos.begin()) {
+					rs.doc.id = k.id;
+					rs.doc.url = k.url;
 				}
+
+				key idx;
+				idx.url = indexes[*it];
+				idx.positions = k.positions;
+
+				rs.indexes.push_back(idx);
 
 				++min_it;
 			}
+
+			res.docs.emplace_back(rs);
 		}
 
 		return res;

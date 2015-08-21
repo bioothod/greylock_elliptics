@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 
 #include "greylock/bucket_transport.hpp"
@@ -283,9 +284,9 @@ private:
 		}
 	}
 
-	void test_intersection(T &t, int num_greylock, size_t same_num, size_t different_num) {
-		std::vector<greylock::eurl> greylock;
-		std::vector<greylock::key> same;
+	void test_intersection(T &t, int num_indexes, size_t same_num, size_t different_num) {
+		std::vector<greylock::eurl> indexes;
+		std::vector<greylock::key> same; // documents which are present in every index
 
 		for (size_t i = 0; i < same_num; ++i) {
 			greylock::key k;
@@ -296,11 +297,11 @@ private:
 			same.emplace_back(k);
 		}
 
-		for (int i = 0; i < num_greylock; ++i) {
+		for (int i = 0; i < num_indexes; ++i) {
 			greylock::eurl url;
 			url.bucket = m_bucket;
 			url.key = "intersection-index.rand." + elliptics::lexical_cast(i) + "." + elliptics::lexical_cast(rand());
-			greylock.push_back(url);
+			indexes.push_back(url);
 
 			greylock::read_write_index<T> idx(t, url);
 
@@ -320,40 +321,42 @@ private:
 		}
 
 		struct index_checker {
-			index_checker(const greylock::intersect::result &res, size_t same_num) {
-				size_t size = 0;
-				for (auto it = res.keys.begin(), end = res.keys.end(); it != end; ++it) {
-					if (!size) {
-						size = it->second.size();
-						continue;
-					}
-
-					if (size != it->second.size() || size != same_num) {
-						std::ostringstream ss;
-						ss << "intersection failed: indexes: " << res.keys.size() <<
-							", same keys in each index: " << same_num <<
-							", current-index: " << it->first.str() <<
-							", found keys (must be equal to the same jeys in each index): " << it->second.size();
-						throw std::runtime_error(ss.str());
-					}
+			index_checker(const greylock::intersect::result &res, const std::vector<greylock::eurl> &requested_indexes, size_t same_num) {
+				if (res.docs.size() != same_num) {
+					std::ostringstream ss;
+					ss << "intersection failed: total number of documents found: " << res.docs.size() <<
+						", number of documents must be: " << same_num;
+					throw std::runtime_error(ss.str());
 				}
 
-				for (size_t i = 0; i < size; ++i) {
-					greylock::key k;
-					for (auto it = res.keys.begin(), end = res.keys.end(); it != end; ++it) {
-						if (!k) {
-							k = it->second[i];
-							continue;
-						}
+				for (auto doc = res.docs.begin(), end = res.docs.end(); doc != end; ++doc) {
+					if (doc->indexes.size() != requested_indexes.size()) {
+						std::ostringstream ss;
+						ss << "intersection failed: number of requested indexes: " << requested_indexes.size() <<
+							", current document: " << doc->doc.str() <<
+							", number of indexes in the document: " << doc->indexes.size();
+						throw std::runtime_error(ss.str());
+					}
 
-						if (k != it->second[i]) {
+					for (auto req = requested_indexes.begin(), req_end = requested_indexes.end(); req != req_end; ++req) {
+						auto f = std::find_if(doc->indexes.begin(), doc->indexes.end(),
+								[&] (const greylock::key &k) { return *req == k.url; });
+						if (f == doc->indexes.end()) {
 							std::ostringstream ss;
-							ss << "intersection failed: indexes: " << res.keys.size() <<
-								", same keys in each index: " << same_num <<
-								", current-index: " << it->first.str() <<
-								", mismatch position: " << i <<
-								", found key: " << it->second[i].str() <<
-								", must be: " << k.str();
+
+							ss << "intersection failed: could not find requested index: " << req->str() <<
+								", in the document indexes" <<
+								": document: " << doc->doc.str() <<
+								", document indexes: [";
+							for (auto doc_idx = doc->indexes.begin(), doc_idx_end = doc->indexes.end();
+									doc_idx != doc_idx_end; ++doc_idx) {
+								ss << doc_idx->str();
+								if (doc_idx == doc->indexes.begin()) {
+									ss << ", ";
+								}
+							}
+							ss << "]";
+
 							throw std::runtime_error(ss.str());
 						}
 					}
@@ -363,18 +366,26 @@ private:
 
 		ribosome::timer tm;
 		greylock::intersect::intersector<T> inter(t);
-		greylock::intersect::result res = inter.intersect(greylock);
-		for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
-			printf("index: %s, keys: %zd\n", it->first.str().c_str(), it->second.size());
-			for (auto k = it->second.begin(); k != it->second.end(); ++k) {
-				dprintf("  %s\n", k->str().c_str());
+		greylock::intersect::result res = inter.intersect(indexes);
+
+		auto check_intersection = [&] () {
+			for (auto it = res.docs.begin(); it != res.docs.end(); ++it) {
+				printf("document: %s, indexes: ", it->doc.str().c_str());
+				for (auto k = it->indexes.begin(); k != it->indexes.end(); ++k) {
+					printf("%s ", k->str().c_str());
+				}
+				printf("\n");
 			}
-		}
 
-		printf("intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
-				num_greylock, res.keys.size(), same_num, same_num + different_num, tm.restart());
+			printf("intersection: requested number of indexes: %d, found documents: %zd, must be: %zd, total number of documents: %zd, "
+					"total indexes in each document: %zd, time: %ld ms\n",
+					num_indexes, res.docs.size(), same_num, same_num + different_num,
+					res.docs[0].indexes.size(), tm.restart());
 
-		index_checker c(res, same_num);
+			index_checker c(res, indexes, same_num);
+		};
+
+		check_intersection();
 
 		greylock::intersect::intersector<T> p(t);
 		std::string start("\0");
@@ -382,22 +393,15 @@ private:
 		size_t num_found = 0;
 
 		while (true) {
-			greylock::intersect::result res = p.intersect(greylock, start, num);
+			greylock::intersect::result res = p.intersect(indexes, start, num);
 
-			if (!res.keys.size())
+			if (!res.docs.size())
 				break;
 
-			size_t cur_size = res.keys.begin()->second.size();
+			size_t cur_size = res.docs.size();
 			num_found += cur_size;
 
-			for (auto it = res.keys.begin(); it != res.keys.end(); ++it) {
-				printf("index: %s, keys: %zd, total keys found: %zd\n", it->first.str().c_str(), cur_size, num_found);
-				for (auto k = it->second.begin(); k != it->second.end(); ++k) {
-					dprintf("  %s\n", k->str().c_str());
-				}
-			}
-
-			index_checker c(res, cur_size);
+			check_intersection();
 
 			if (cur_size < num)
 				break;
@@ -406,11 +410,14 @@ private:
 				break;
 		}
 
-		printf("paginated intersection: indexes: %d, found keys: %zd, must be: %zd, total keys in each index: %zd, time: %ld ms\n",
-				num_greylock, num_found, same_num, same_num + different_num, tm.restart());
+		printf("paginated intersection: requested number of indexes: %d, found documents: %zd, must be: %zd, total number of documents: %zd, "
+				"total indexes in each document: %zd, time: %ld ms\n",
+				num_indexes, num_found, same_num, same_num + different_num,
+				res.docs[0].indexes.size(), tm.restart());
+
 		if (num_found != same_num) {
 			std::ostringstream ss;
-			ss << "paginated intersection failed: indexes: " << num_greylock << ", same keys in each index: " << same_num <<
+			ss << "paginated intersection failed: indexes: " << num_indexes << ", same keys in each index: " << same_num <<
 				", found keys: " << num_found <<
 				", total keys in each index: " << different_num + same_num;
 			throw std::runtime_error(ss.str());
