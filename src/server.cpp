@@ -19,6 +19,7 @@
 #include <thevoid/rapidjson/prettywriter.h>
 #include <thevoid/rapidjson/document.h>
 
+#include <ribosome/split.hpp>
 #include <ribosome/timer.hpp>
 
 #include <swarm/logger.hpp>
@@ -186,6 +187,43 @@ private:
 	rapidjson::MemoryPoolAllocator<> m_allocator;
 };
 
+static inline std::string index_name(const std::string &mbox, const std::string &aname, const std::string &iname) {
+	std::string ret = std::string(mbox) + "." + std::string(aname) + "." + std::string(iname);
+	return ret;
+}
+
+static std::map<std::string, std::vector<size_t>> get_indexes(const std::string &mbox, const rapidjson::Value &idxs) {
+	std::map<std::string, std::vector<size_t>> iname2pos;
+
+	if (!idxs.IsObject())
+		return iname2pos;
+
+	ribosome::split spl;
+	for (rapidjson::Value::ConstMemberIterator it = idxs.MemberBegin(), idxs_end = idxs.MemberEnd(); it != idxs_end; ++it) {
+		const char *aname = it->name.GetString();
+		const rapidjson::Value &avalue = it->value;
+
+		if (!avalue.IsString())
+			continue;
+
+		std::vector<ribosome::lstring> indexes = spl.convert_split_words(avalue.GetString(), avalue.GetStringLength());
+		for (size_t pos = 0; pos < indexes.size(); ++pos) {
+			std::string iname = index_name(mbox, aname, ribosome::lconvert::to_string(indexes[pos]));
+
+			auto f = iname2pos.find(iname);
+			if (f == iname2pos.end()) {
+				std::vector<size_t> v;
+				v.push_back(pos);
+				iname2pos[iname] = v;
+			} else {
+				f->second.push_back(pos);
+			}
+		}
+	}
+
+	return iname2pos;
+}
+
 class http_server : public thevoid::server<http_server>
 {
 public:
@@ -234,47 +272,40 @@ public:
 			rapidjson::Document doc;
 			doc.Parse<0>(data.c_str());
 
-			if (!doc.HasMember("indexes")) {
-				ILOG_ERROR("url: %s, error: %d: there is no 'indexes' member", req.url().to_human_readable().c_str(), -EINVAL);
+			const char *mbox = greylock::get_string(doc, "mailbox");
+			if (!mbox) {
+				ILOG_ERROR("on_request: url: %s, error: %d: 'mailbox' must be a string",
+						req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
-			const auto &idxs = doc["indexes"];
 
-			if (!idxs.IsArray()) {
-				ILOG_ERROR("url: %s, error: %d: 'indexes' must be array", req.url().to_human_readable().c_str(), -EINVAL);
+			const rapidjson::Value &query = greylock::get_object(doc, "query");
+			if (!query.IsObject()) {
+				ILOG_ERROR("on_request: url: %s, mailbox: %s, error: %d: 'query' must be object",
+						req.url().to_human_readable().c_str(), mbox, -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
-
 
 			size_t page_num = ~0U;
 			std::string page_start("\0");
 
 			if (doc.HasMember("paging")) {
 				const auto &pages = doc["paging"];
-				if (pages.HasMember("num")) {
-					const auto &n = pages["num"];
-					if (n.IsNumber())
-						page_num = n.GetUint64();
-				}
-
-				if (pages.HasMember("start")) {
-					const auto &s = pages["start"];
-					if (s.IsString())
-						page_start = s.GetString();
-				}
+				page_num = greylock::get_int64(pages, "num", ~0U);
+				page_start = greylock::get_string(pages, "start", "\0");
 			}
 
 			std::set<greylock::eurl> raw_greylock_set;
-			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
-				if (!idx->IsString())
-					continue;
 
+			auto iname2pos = get_indexes(mbox, query);
+
+			for (auto idx = iname2pos.begin(), idx_end = iname2pos.end(); idx != idx_end; ++idx) {
 				greylock::eurl start;
 				start.bucket = server()->meta_bucket_name();
-				start.key = idx->GetString();
+				start.key = idx->first;
 
 				raw_greylock_set.emplace(start);
 			}
@@ -288,7 +319,16 @@ public:
 			ILOG_INFO("url: %s: starting intersection, json parsing duration: %d ms",
 					req.url().to_human_readable().c_str(), search_tm.elapsed());
 
-			intersect(req, raw_greylock, result);
+			try {
+				intersect(req, raw_greylock, result);
+			} catch (const std::exception &e) {
+				// likely this exception tells that there are no requested indexes
+				// FIXME exception mechanism has to be reworked
+				ILOG_ERROR("url: %s: could not run intersection for %d indexes: %s",
+					req.url().to_human_readable().c_str(), raw_greylock.size(), e.what());
+				send_search_result(result);
+				return;
+			}
 
 			const rapidjson::Value &match = greylock::get_object(doc, "match");
 			if (match.IsObject()) {
@@ -304,7 +344,8 @@ public:
 
 			ILOG_INFO("url: %s: requested indexes: %d, requested number of documents: %d, search start: %s, "
 					"found documents: %d, cookie: %s, completed: %d, duration: %d ms",
-					req.url().to_human_readable().c_str(), idxs.Size(), page_num, page_start.c_str(),
+					req.url().to_human_readable().c_str(),
+					iname2pos.size(), page_num, page_start.c_str(),
 					result.docs.size(), result.cookie.c_str(), result.completed, search_tm.elapsed());
 		}
 
@@ -394,46 +435,26 @@ public:
 	};
 
 	struct on_index : public thevoid::simple_request_stream<http_server> {
-		void insert_one_key(const thevoid::http_request &req, greylock::key &doc, const rapidjson::Value &idxs) {
+		void process_one_document(const thevoid::http_request &req, const std::string &mbox,
+				greylock::key &doc, const rapidjson::Value &idxs) {
 			ribosome::timer all_tm;
+			ribosome::timer tm;
 
-			ILOG_INFO("insert_one_key: url: %s, doc: %s, indexes: %d: start insertion",
-					req.url().to_human_readable().c_str(),
-					doc.str().c_str(), idxs.Size());
+			ILOG_INFO("process_one_document: url: %s, mailbox: %s, doc: %s: start insertion",
+					req.url().to_human_readable().c_str(), mbox,
+					doc.str().c_str());
 
-			int idx_pos = 0;
-			for (auto idx = idxs.Begin(), idx_end = idxs.End(); idx != idx_end; ++idx) {
-				ribosome::timer tm;
+			auto iname2pos = get_indexes(mbox, idxs);
 
-				if (!idx->IsObject())
-					continue;
-
+			for (auto idx = iname2pos.begin(), idx_end = iname2pos.end(); idx != idx_end; ++idx) {
 				// for every index we put vector of positions where given index is located in the document
 				// since it is an inverted index, it contains list of document links each of which contains
 				// array of the positions, where given index lives in the document
-				doc.positions.clear();
-				const rapidjson::Value &pos = greylock::get_array(*idx, "positions");
-				if (pos.IsArray()) {
-					for (auto p = pos.Begin(), pend = pos.End(); p != pend; ++p) {
-						if (p->IsInt()) {
-							doc.positions.push_back(p->GetInt());
-						} else if (p->IsUint()) {
-							doc.positions.push_back(p->GetUint());
-						} else if (p->IsInt64()) {
-							doc.positions.push_back(p->GetInt64());
-						} else if (p->IsUint64()) {
-							doc.positions.push_back(p->GetUint64());
-						}
-					}
-				}
-
-				const char *name = greylock::get_string(*idx, "name");
-				if (!name)
-					continue;
+				doc.positions.swap(idx->second);
 
 				greylock::eurl start;
 				start.bucket.assign(server()->meta_bucket_name());
-				start.key.assign(name);
+				start.key.assign(idx->first);
 
 				locker<http_server> l(server(), start.str());
 				std::unique_lock<locker<http_server>> lk(l);
@@ -442,8 +463,9 @@ public:
 
 				int err = index.insert(doc);
 				if (err < 0) {
-					ILOG_ERROR("insert_one_key: url: %s, doc: %s, index: %s error: %d: could not insert new key",
-						req.url().to_human_readable().c_str(),
+					ILOG_ERROR("process_one_document: url: %s, mailbox: %s, "
+							"doc: %s, index: %s error: %d: could not insert new key",
+						req.url().to_human_readable().c_str(), mbox,
 						doc.str().c_str(),
 						start.str().c_str(),
 						err);
@@ -451,32 +473,30 @@ public:
 					return;
 				}
 
-				ILOG_INFO("insert_one_key: url: %s, doc: %s, index: %s, index position: %d/%d, elapsed time: %d ms",
-					req.url().to_human_readable().c_str(),
+				ILOG_INFO("process_one_document: url: %s, mailbox: %s, "
+						"doc: %s, index: %s, elapsed time: %d ms",
+					req.url().to_human_readable().c_str(), mbox,
 					doc.str().c_str(),
 					start.str().c_str(),
-					idx_pos, idxs.Size(),
-					tm.elapsed());
-
-				idx_pos++;
+					tm.restart());
 			}
 
-			ILOG_INFO("insert_one_key: url: %s, doc: %s, indexes: %d: successfully inserded, elapsed time: %d ms",
-					req.url().to_human_readable().c_str(),
-					doc.str().c_str(), idxs.Size(), all_tm.elapsed());
+			ILOG_INFO("process_one_document: url: %s, mailbox: %s, doc: %s, total number of indexes: %d, elapsed time: %d ms",
+					req.url().to_human_readable().c_str(), mbox,
+					doc.str().c_str(), iname2pos.size(), all_tm.elapsed());
 		}
 
-		void parse_ids(const thevoid::http_request &req, const rapidjson::Value &ids) {
-			for (auto it = ids.Begin(), id_end = ids.End(); it != id_end; ++it) {
+		void parse_docs(const thevoid::http_request &req, const std::string &mbox, const rapidjson::Value &docs) {
+			for (auto it = docs.Begin(), id_end = docs.End(); it != id_end; ++it) {
 				if (it->IsObject()) {
 					greylock::key doc;
 
+					const char *id = greylock::get_string(*it, "id");
 					const char *bucket = greylock::get_string(*it, "bucket");
 					const char *key = greylock::get_string(*it, "key");
-					const char *id = greylock::get_string(*it, "id");
 					if (!bucket || !key || !id) {
-						ILOG_ERROR("parse_ids: url: %s, error: %d: 'ids/{bucket,ket,id} must be strings",
-								req.url().to_human_readable().c_str(), -EINVAL);
+						ILOG_ERROR("parse_docs: url: %s, mailbox: %s, error: %d: 'docs/{bucket,ket,id} must be strings",
+								req.url().to_human_readable().c_str(), mbox, -EINVAL);
 						continue;
 					}
 
@@ -484,14 +504,14 @@ public:
 					doc.url.key.assign(key);
 					doc.id.assign(id);
 
-					const rapidjson::Value &idxs = greylock::get_array(*it, "indexes");
-					if (!idxs.IsArray()) {
-						ILOG_ERROR("parse_ids: url: %s, error: %d: 'ids/indexes' must be array",
-								req.url().to_human_readable().c_str(), -EINVAL);
+					const rapidjson::Value &idxs = greylock::get_object(*it, "index");
+					if (!idxs.IsObject()) {
+						ILOG_ERROR("parse_docs: url: %s, mailbox: %s, error: %d: 'docs/index' must be object",
+								req.url().to_human_readable().c_str(), mbox, -EINVAL);
 						continue;
 					}
 
-					insert_one_key(req, doc, idxs);
+					process_one_document(req, mbox, doc, idxs);
 				}
 			}
 		}
@@ -506,19 +526,26 @@ public:
 			rapidjson::Document doc;
 			doc.Parse<0>(data.c_str());
 
-			const rapidjson::Value &ids = greylock::get_array(doc, "ids");
-			if (!ids.IsArray()) {
-				ILOG_ERROR("on_request: url: %s, error: %d: 'ids' must be array",
+			const char *mbox = greylock::get_string(doc, "mailbox");
+			if (!mbox) {
+				ILOG_ERROR("on_request: url: %s, error: %d: 'mailbox' must be a string",
 						req.url().to_human_readable().c_str(), -EINVAL);
 				this->send_reply(swarm::http_response::bad_request);
 				return;
 			}
 
-			parse_ids(req, ids);
+			const rapidjson::Value &docs = greylock::get_array(doc, "docs");
+			if (!docs.IsArray()) {
+				ILOG_ERROR("on_request: url: %s, mailbox: %s, error: %d: 'docs' must be array",
+						req.url().to_human_readable().c_str(), mbox, -EINVAL);
+				this->send_reply(swarm::http_response::bad_request);
+				return;
+			}
 
-			ILOG_INFO("on_request: url: %s, keys: %d: insertion completed, index duration: %d ms",
-					req.url().to_human_readable().c_str(),
-					ids.Size(), index_tm.elapsed());
+			parse_docs(req, mbox, docs);
+
+			ILOG_INFO("on_request: url: %s, mailbox: %s, keys: %d: insertion completed, index duration: %d ms",
+					req.url().to_human_readable().c_str(), mbox, docs.Size(), index_tm.elapsed());
 			this->send_reply(thevoid::http_response::ok);
 		}
 	};

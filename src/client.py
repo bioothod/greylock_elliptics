@@ -191,9 +191,6 @@ class search_machine():
         self.mailbox = mailbox
         self.mailbox_hash = hash(mailbox) & 0xffffffff
 
-    def index_from_string(self, s):
-        return self.mailbox + '.' + s
-
     def normalize(self, url, words):
         raw = {}
         raw['text'] = ' '.join(words)
@@ -216,25 +213,31 @@ class search_machine():
         idx = self.mailbox_hash % len(urls)
         return urls[idx]
 
-    def index(self, url, words, attrs, id, bucket, key):
-        raw = {}
-        raw["id"] = id
-        raw["bucket"] = bucket
-        raw["key"] = key
-
-        msg = {}
-        msg["ids"] = [raw]
-        msg["indexes"] = []
-
-        for w in words:
-            msg["indexes"].append(self.index_from_string(w))
+    def text_attrs_to_dict(self, text, attrs):
+        idx = {}
         for a in attrs:
-            aname = u'attr:' + self.index_from_string(a)
-            msg["indexes"].append(aname)
-            print("%s" % (aname))
+            spl = a.split(':', 1)
+            if len(spl) >= 2:
+                idx[spl[0]] = spl[1]
+        idx["text"] = text
+
+        return idx
+
+    def index(self, url, text, attrs, id, bucket, key):
+        doc = {}
+        doc["id"] = id
+        doc["bucket"] = bucket
+        doc["key"] = key
+        doc["index"] = self.text_attrs_to_dict(text, attrs)
+
+        docs = {}
+        docs["docs"] = [doc]
+        docs["mailbox"] = self.mailbox
+
 
         # this will be a unicode string
-        js = json.dumps(msg, encoding='utf8', ensure_ascii=False)
+        js = json.dumps(docs, encoding='utf8', ensure_ascii=False)
+        print js
 
         headers = {}
         timeout = len(words) / 50 + 10
@@ -243,28 +246,26 @@ class search_machine():
         if r.status_code != requests.codes.ok:
             raise RuntimeError("Could not update indexes: url: %s, status: %d" % (url, r.status_code))
 
-        print "Index has been successfully updated for ID %s" % raw["id"]
+        print "All indexes for document '%s' have been successfully updated" % (id)
 
-    def index_multiple_urls(self, urls, words, attrs, id, bucket, key):
+    def index_multiple_urls(self, urls, text, attrs, id, bucket, key):
         url = self.get_url(urls)
-        return self.index(url, words, attrs, id, bucket, key)
+        return self.index(url, text, attrs, id, bucket, key)
 
-    def search(self, url, words, attrs, paging_start, paging_num):
-        s = {}
+    def search(self, url, text, attrs, paging_start, paging_num):
         p = {}
         p["num"] = paging_num
         p["start"] = paging_start
+
+        s = {}
         s["paging"] = p
-        s["indexes"] = []
-        for w in words:
-            s["indexes"].append(self.index_from_string(w))
-        for a in attrs:
-            aname = 'attr:' + self.index_from_string(a)
-            s['indexes'].append(aname)
-            print aname
+        s["text"] = text
+        s["mailbox"] = self.mailbox
+        s["query"] = self.text_attrs_to_dict(text, attrs)
 
         # this will be a unicode string
-        js = json.dumps(s, ensure_ascii=False)
+        js = json.dumps(s, encoding='utf8', ensure_ascii=False)
+        print js
 
         headers = {}
         timeout = len(words) / 100 + 10
@@ -280,9 +281,9 @@ class search_machine():
         for k in res["ids"]:
             print "bucket: '%s', key: '%s', id: '%s'" % (k["bucket"], k["key"], k["id"])
 
-    def search_multiple_urls(self, urls, words, attrs, paging_start, paging_num):
+    def search_multiple_urls(self, urls, text, attrs, paging_start, paging_num):
         url = self.get_url(urls)
-        return self.search(url, words, attrs, paging_start, paging_num)
+        return self.search(url, text, attrs, paging_start, paging_num)
 
 
 if __name__ == '__main__':
@@ -296,7 +297,7 @@ if __name__ == '__main__':
 
 
     direct_parser = argparse.ArgumentParser(description='Arguments, which must be specified if Consul autodiscovery is not used.', add_help=False)
-    direct_parser.add_argument('--normalize-url', dest='normalize_urls', action='append', required=True,
+    direct_parser.add_argument('--normalize-url', dest='normalize_urls', action='append',
             help='URL used to normalize data, for example: http://example.com/normalize. Can be specified multiple times.')
     direct_parser.add_argument('--index-url', dest='index_urls', action='append',
             help='URL used to index data, for example: http://example.com/index. Can be specified multiple times.')
@@ -350,10 +351,14 @@ if __name__ == '__main__':
         if args.dry_run:
             exit(0)
 
+        words = p.words
+
         sm = search_machine(p.mailbox)
-        url = random.choice(args.normalize_urls)
-        words = sm.normalize(url, p.words)
-        sm.index_multiple_urls(args.index_urls, words, p.attrs, p.id, args.bucket, args.key)
+        if args.normalize_urls and len(args.normalize_urls) != 0:
+            norm_url = random.choice(args.normalize_urls)
+            words = sm.normalize(norm_url, words)
+
+        sm.index_multiple_urls(args.index_urls, ' '.join(words), p.attrs, p.id, args.bucket, args.key)
     else:
         if not args.mailbox:
             print("You must specify mailbox name to search in")
@@ -373,6 +378,9 @@ if __name__ == '__main__':
                 words.append(a)
 
         sm = search_machine(args.mailbox)
-        url = random.choice(args.normalize_urls)
-        words = sm.normalize(url, words)
-        sm.search_multiple_urls(args.search_urls, words, attrs, args.page_start, args.page_num)
+
+        if args.normalize_urls and len(args.normalize_urls) != 0:
+            norm_url = random.choice(args.normalize_urls)
+            words = sm.normalize(norm_url, words)
+
+        sm.search_multiple_urls(args.search_urls, ' '.join(words), attrs, args.page_start, args.page_num)

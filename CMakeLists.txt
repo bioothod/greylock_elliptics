@@ -13,12 +13,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
 
 find_package(Boost REQUIRED COMPONENTS system program_options filesystem)
 find_package(Elliptics REQUIRED)
-
-find_path(RIBOSOME_INCLUDE_DIRS NAMES "ribosome/timer.hpp" PATH_SUFFIXES "ribosome")
-if (NOT RIBOSOME_INCLUDE_DIRS)
-	message(FATAL_ERROR "Ribosome development files have not been found")
-endif()
-message("Ribosome headers: ${RIBOSOME_INCLUDE_DIRS}")
+find_package(Ribosome REQUIRED)
 
 INCLUDE(cmake/locate_library.cmake)
 

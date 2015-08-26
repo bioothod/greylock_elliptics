@@ -1,0 +1,22 @@
+{
+	"mailbox": "namespace where all related indexes are stored",
+	"docs": [
+
+		{
+			"id":		"document ID",
+			"bucket":	"document elliptics bucket",
+			"key":		"document elliptics key",
+
+			"index": {
+				"attribute key": "value",
+				"another key": "another value",
+				"some different attribute": "attribute data",
+				"text key": "All fields in this 'text' section will be split into key/value pairs where 'key' is attribute name ('attribute key', 'another key', 'text key' and so on) and 'value' is text strings split to tokens ('value', 'another', 'value' and so on). When searching one has to specify some attribute names and some of its values. Search and indexing are performed within 'mailbox' namespace."
+				]
+			}
+		},
+		{
+			"bucket": ""
+		}
+	]
+}
