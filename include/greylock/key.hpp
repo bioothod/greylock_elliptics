@@ -35,13 +35,21 @@ struct key {
 	}
 
 	bool operator<(const key &other) const {
+		if (timestamp < other.timestamp)
+			return true;
+		if (timestamp > other.timestamp)
+			return false;
 		return id < other.id;
 	}
 	bool operator<=(const key &other) const {
+		if (timestamp < other.timestamp)
+			return true;
+		if (timestamp > other.timestamp)
+			return false;
 		return id <= other.id;
 	}
 	bool operator==(const key &other) const {
-		return id == other.id;
+		return (timestamp == other.timestamp) && (id == other.id);
 	}
 	bool operator!=(const key &other) const {
 		return id != other.id;
