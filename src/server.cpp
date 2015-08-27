@@ -368,6 +368,13 @@ public:
 				rapidjson::Value idv(doc.id.c_str(), doc.id.size(), allocator);
 				key.AddMember("id", idv, allocator);
 
+				rapidjson::Value ts(rapidjson::kObjectType);
+				long tsec, tnsec;
+				doc.get_timestamp(tsec, tnsec);
+				ts.AddMember("tsec", tsec, allocator);
+				ts.AddMember("tnsec", tnsec, allocator);
+				key.AddMember("timestamp", ts, allocator);
+
 				ids.PushBack(key, allocator);
 			}
 
