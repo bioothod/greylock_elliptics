@@ -7,6 +7,7 @@ import re
 import random
 import requests
 import sys
+import time
 
 from HTMLParser import HTMLParser
 
@@ -23,6 +24,7 @@ class content_parser(HTMLParser):
 
         # if this ID lives in elliptics
         self.id = id
+        self.timestamp = 0
 
         # all indexes are related to given mailbox
         # if it is None, 'To' address is used
@@ -150,6 +152,8 @@ class content_parser(HTMLParser):
         to_header = parse_header(msg['To'])
         feed_mail_addr(to_header, 'to')
 
+        self.timestamp = mktime_tz(parsedate_tz(msg['Date']))
+
         # this address will be used to modify every index,
         # i.e. this scripts only updates indexes which belong to given mailbox
         if not self.mailbox:
@@ -167,9 +171,6 @@ class content_parser(HTMLParser):
             if not self.id or len(self.id) == 0:
                 raise NameError("Could not detect ID in 'Message-Id' header and "
                         "no ID has been provided via command line, exiting")
-
-            t = mktime_tz(parsedate_tz(msg['Date']))
-            self.id = str(t) + '.' + self.id
 
         def feed_check_multipart(msg):
             if not msg.is_multipart():
@@ -223,12 +224,18 @@ class search_machine():
 
         return idx
 
-    def index(self, url, text, attrs, id, bucket, key):
+    def index(self, url, text, attrs, id, bucket, key, tsec = 0):
         doc = {}
         doc["id"] = id
         doc["bucket"] = bucket
         doc["key"] = key
         doc["index"] = self.text_attrs_to_dict(text, attrs)
+        if tsec != 0:
+            ts = {}
+            ts["tsec"] = tsec
+            ts["tnsec"] = 0
+
+            doc["timestamp"] = ts
 
         docs = {}
         docs["docs"] = [doc]
@@ -248,9 +255,9 @@ class search_machine():
 
         print "All indexes for document '%s' have been successfully updated" % (id)
 
-    def index_multiple_urls(self, urls, text, attrs, id, bucket, key):
+    def index_multiple_urls(self, urls, text, attrs, id, bucket, key, tsec):
         url = self.get_url(urls)
-        return self.index(url, text, attrs, id, bucket, key)
+        return self.index(url, text, attrs, id, bucket, key, tsec)
 
     def search(self, url, text, attrs, paging_start, paging_num):
         p = {}
@@ -279,7 +286,10 @@ class search_machine():
         print "completed: %s" % res["completed"]
         print "paging: num: %d, start: '%s'" % (res["paging"]["num"], res["paging"]["start"])
         for k in res["ids"]:
-            print "bucket: '%s', key: '%s', id: '%s'" % (k["bucket"], k["key"], k["id"])
+            ts = k["timestamp"]
+            l = time.localtime(ts["tsec"])
+            print "bucket: '%s', key: '%s', id: '%s', ts: %s.%09d" % (k["bucket"], k["key"], k["id"],
+                    time.strftime("%Y-%m-%d %H:%M:%S", l), ts["tnsec"])
 
     def search_multiple_urls(self, urls, text, attrs, paging_start, paging_num):
         url = self.get_url(urls)
@@ -358,7 +368,7 @@ if __name__ == '__main__':
             norm_url = random.choice(args.normalize_urls)
             words = sm.normalize(norm_url, words)
 
-        sm.index_multiple_urls(args.index_urls, ' '.join(words), p.attrs, p.id, args.bucket, args.key)
+        sm.index_multiple_urls(args.index_urls, ' '.join(words), p.attrs, p.id, args.bucket, args.key, p.timestamp)
     else:
         if not args.mailbox:
             print("You must specify mailbox name to search in")
