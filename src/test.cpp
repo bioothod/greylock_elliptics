@@ -370,11 +370,11 @@ private:
 
 		auto check_intersection = [&] () {
 			for (auto it = res.docs.begin(); it != res.docs.end(); ++it) {
-				printf("document: %s, indexes: ", it->doc.str().c_str());
+				dprintf("document: %s, indexes: ", it->doc.str().c_str());
 				for (auto k = it->indexes.begin(); k != it->indexes.end(); ++k) {
-					printf("%s ", k->str().c_str());
+					dprintf("%s ", k->str().c_str());
 				}
-				printf("\n");
+				dprintf("\n");
 			}
 
 			printf("intersection: requested number of indexes: %d, found documents: %zd, must be: %zd, total number of documents: %zd, "
