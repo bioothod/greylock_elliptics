@@ -17,17 +17,13 @@ struct key {
 
 	void set_timestamp(long tsec, long nsec) {
 		timestamp = tsec;
-		timestamp <<= 34;
-		timestamp |= nsec & ((1<<22) - 1);
+		timestamp <<= 30;
+		timestamp |= nsec & ((1<<30) - 1);
 	}
 
 	void get_timestamp(long &tsec, long &nsec) const {
-		uint64_t tmp = timestamp;
-
-		tmp >>= 34;
-
-		tsec = timestamp;
-		nsec = timestamp & ((1<<22) - 1);
+		tsec = timestamp >> 30;
+		nsec = timestamp & ((1<<30) - 1);
 	}
 
 	size_t size() const {
