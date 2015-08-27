@@ -500,14 +500,29 @@ public:
 						continue;
 					}
 
+					struct timespec ts;
+					clock_gettime(CLOCK_REALTIME, &ts);
+
+					const rapidjson::Value &timestamp = greylock::get_object(*it, "timestamp");
+					if (timestamp.IsObject()) {
+						long tsec, tnsec;
+
+						tsec = greylock::get_int64(timestamp, "tsec", ts.tv_sec);
+						tnsec = greylock::get_int64(timestamp, "tnsec", ts.tv_nsec);
+
+						doc.set_timestamp(tsec, tnsec);
+					} else {
+						doc.set_timestamp(ts.tv_sec, ts.tv_nsec);
+					}
+
 					doc.url.bucket.assign(bucket);
 					doc.url.key.assign(key);
 					doc.id.assign(id);
 
 					const rapidjson::Value &idxs = greylock::get_object(*it, "index");
 					if (!idxs.IsObject()) {
-						ILOG_ERROR("parse_docs: url: %s, mailbox: %s, error: %d: 'docs/index' must be object",
-								req.url().to_human_readable().c_str(), mbox, -EINVAL);
+						ILOG_ERROR("parse_docs: url: %s, mailbox: %s, doc: %s, error: %d: 'docs/index' must be object",
+								req.url().to_human_readable().c_str(), mbox, doc.str().c_str(), -EINVAL);
 						continue;
 					}
 

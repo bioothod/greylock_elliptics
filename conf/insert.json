@@ -6,6 +6,10 @@
 			"id":		"document ID",
 			"bucket":	"document elliptics bucket",
 			"key":		"document elliptics key",
+			"timestamp": {
+				"tsec": 1440696489,
+				"tnsec": 1234
+			},
 
 			"index": {
 				"attribute key": "value",
