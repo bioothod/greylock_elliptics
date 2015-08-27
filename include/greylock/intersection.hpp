@@ -207,8 +207,8 @@ public:
 				key k = *min_it;
 
 				if (it == pos.begin()) {
-					rs.doc.id = k.id;
-					rs.doc.url = k.url;
+					rs.doc = k;
+					rs.doc.positions.clear();
 				}
 
 				key idx;
