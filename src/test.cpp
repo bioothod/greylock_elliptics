@@ -116,6 +116,21 @@ private:
 		printf("remove-test: meta after remove: %s, removed entries: %zd, time: %ld ms\n",
 				idx.meta().str().c_str(), keys.size() / 2, tm.elapsed());
 
+		if (idx.meta().num_keys != keys.size() - del_num) {
+			printf("remove-test: number of keys mismatch: meta: %s, inserted keys: %zd, removed entries: %d, "
+				"meta.num_keys must be: %ld, but it is: %lld\n",
+				idx.meta().str().c_str(), keys.size(), del_num, keys.size() - del_num, idx.meta().num_keys.load());
+
+			std::ostringstream ss;
+			ss << "remove-test: number of keys mismatch" <<
+				": meta: " << idx.meta().str() <<
+				", inserted keys: " << keys.size() <<
+				", removed keys: " << del_num <<
+				", meta.num_keys must be: " << keys.size() - del_num <<
+				", but it is: " << idx.meta().num_keys.load();
+			throw std::runtime_error(ss.str());
+		}
+
 		int pos = 0;
 		for (auto it = keys.begin(), end = keys.end(); it != end; ++it) {
 			greylock::key found = idx.search(*it);

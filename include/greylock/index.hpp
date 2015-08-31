@@ -31,6 +31,7 @@ struct index_meta {
 		num_leaf_pages = 0;
 		generation_number_sec = 0;
 		generation_number_nsec = 0;
+		num_keys = 0;
 	}
 
 	index_meta(const index_meta &o) {
@@ -43,6 +44,7 @@ struct index_meta {
 		num_leaf_pages = o.num_leaf_pages.load();
 		generation_number_sec = o.generation_number_sec.load();
 		generation_number_nsec = o.generation_number_nsec.load();
+		num_keys = o.num_keys.load();
 
 		return *this;
 	}
@@ -52,6 +54,7 @@ struct index_meta {
 	std::atomic<unsigned long long> num_leaf_pages;
 	std::atomic<unsigned long long> generation_number_sec;
 	std::atomic<unsigned long long> generation_number_nsec;
+	std::atomic<unsigned long long> num_keys;
 
 	void update_generation_number() {
 		struct timespec ts;
@@ -66,7 +69,8 @@ struct index_meta {
 				(num_pages != other.num_pages) ||
 				(num_leaf_pages != other.num_leaf_pages) ||
 				(generation_number_sec != other.generation_number_sec) ||
-				(generation_number_nsec != other.generation_number_nsec)
+				(generation_number_nsec != other.generation_number_nsec) ||
+				(num_keys != other.num_keys)
 			);
 	}
 
@@ -75,7 +79,9 @@ struct index_meta {
 		ss << "page_index: " << page_index <<
 			", num_pages: " << num_pages <<
 			", num_leaf_pages: " << num_leaf_pages <<
-			", generation_number: " << generation_number_sec << "." << generation_number_nsec;
+			", generation_number: " << generation_number_sec << "." << generation_number_nsec <<
+			", num_keys: " << num_keys
+			;
 		return ss.str();
 	}
 };
@@ -392,6 +398,8 @@ private:
 			return e.error;
 		}
 
+		bool replaced = false;
+
 		int err;
 		page p;
 		p.load(e.data.data(), e.data.size());
@@ -419,14 +427,17 @@ private:
 				leaf_key.url = generate_page_url();
 
 				page leaf(true), unused_split;
-				leaf.insert_and_split(obj, unused_split);
+				leaf.insert_and_split(obj, unused_split, replaced);
+				if (!replaced)
+					m_meta.num_keys++;
 				err = check(m_t.write(leaf_key.url, leaf.save()));
 				if (err)
 					return err;
 
 				// no need to perform recursion unwind, since there were no entry for this new leaf
 				// which can only happen when page was originally empty
-				p.insert_and_split(leaf_key, unused_split);
+				// do not increment @num_keys since it is not a leaf page
+				p.insert_and_split(leaf_key, unused_split, replaced);
 				p.next = leaf_key.url;
 				err = check(m_t.write(page_key, p.save()));
 				if (err)
@@ -467,12 +478,13 @@ private:
 					p.str().c_str(), found.str().c_str(), found.id.c_str(), rec.page_start.id.c_str());
 				found.id = rec.page_start.id;
 
-				// page has changed, it must be written into storage
+				// page has been changed, it must be written into storage
 				want_return = false;
 			}
 
 			if (rec.split_key) {
-				p.insert_and_split(rec.split_key, split);
+				// not a leaf page, do not increment @num_keys
+				p.insert_and_split(rec.split_key, split, replaced);
 
 				// there is a split page, it was already written into the storage,
 				// now its time to insert it into parent and upate parent
@@ -485,7 +497,10 @@ private:
 				return 0;
 			}
 		} else {
-			p.insert_and_split(obj, split);
+			// this is a leaf page, increment @num_keys if it was not a key replacement
+			p.insert_and_split(obj, split, replaced);
+			if (!replaced)
+				m_meta.num_keys++;
 		}
 
 		rec.page_start = p.objects.front();
@@ -528,9 +543,11 @@ private:
 
 			// we have written split page and old root page above
 			// now its time to create and write the new root
+			//
+			// root pages are never leaf pages, do not increment @num_keys
 			page new_root, unused_split;
-			new_root.insert_and_split(old_root_key, unused_split);
-			new_root.insert_and_split(rec.split_key, unused_split);
+			new_root.insert_and_split(old_root_key, unused_split, replaced);
+			new_root.insert_and_split(rec.split_key, unused_split, replaced);
 
 			new_root.next = new_root.objects.front().url;
 
@@ -582,6 +599,7 @@ private:
 
 		// we must copy key, since if it is leaf page and it is the last key in the page,
 		// page will be resized and last key content will be overwritten with STL internal data
+		// if it is not the last key, it will be overwritten with the next key after page's remove() method is completed
 		key found = p.objects[found_pos];
 
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: page: %s -> %s, found_pos: %d, found_key: %s",
@@ -590,7 +608,9 @@ private:
 			found_pos, found.str().c_str());
 
 		if (p.is_leaf() || rec.removed) {
-			p.remove(found_pos);
+			if (p.is_leaf())
+				p.remove(found_pos);
+			m_meta.num_keys--;
 		} else {
 			err = remove(found.url, obj, rec);
 			if (err < 0)

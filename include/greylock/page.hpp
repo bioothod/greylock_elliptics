@@ -142,9 +142,11 @@ struct page {
 		return total_size < max_page_size / 3;
 	}
 
-	bool insert_and_split(const key &obj, page &other) {
+	bool insert_and_split(const key &obj, page &other, bool &replaced) {
 		std::vector<key> copy;
 		bool copied = false;
+
+		replaced = false;
 
 		for (auto it = objects.begin(); it != objects.end(); ++it) {
 			if (obj <= *it) {
@@ -153,6 +155,7 @@ struct page {
 				copied = true;
 
 				if (obj == *it) {
+					replaced = true;
 					total_size -= it->size();
 					++it;
 				}
