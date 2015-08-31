@@ -21,6 +21,7 @@
 
 #include <ribosome/split.hpp>
 #include <ribosome/timer.hpp>
+#include <ribosome/distance.hpp>
 
 #include <swarm/logger.hpp>
 
@@ -187,42 +188,207 @@ private:
 	rapidjson::MemoryPoolAllocator<> m_allocator;
 };
 
-static inline std::string index_name(const std::string &mbox, const std::string &aname, const std::string &iname) {
-	std::string ret = std::string(mbox) + "." + std::string(aname) + "." + std::string(iname);
-	return ret;
-}
+struct single_attribute {
+	typedef std::vector<size_t> pos_t;
 
-static std::map<std::string, std::vector<size_t>> get_indexes(const std::string &mbox, const rapidjson::Value &idxs) {
-	std::map<std::string, std::vector<size_t>> iname2pos;
+	std::string aname;
+	pos_t ivec;
 
-	if (!idxs.IsObject())
-		return iname2pos;
+	// greylock operates with raw index names, it doesn't know whether they were organized into attributes or not
+	// It returns array of raw index names and positions where those indexes live in each returned document.
+	//
+	// We have to split array of raw index names into per-attribute indexes
+	// This @apos vector contains positions within raw index name vector of the indexes which belong to @aname attribute
+	pos_t apos;
+};
 
-	ribosome::split spl;
-	for (rapidjson::Value::ConstMemberIterator it = idxs.MemberBegin(), idxs_end = idxs.MemberEnd(); it != idxs_end; ++it) {
-		const char *aname = it->name.GetString();
-		const rapidjson::Value &avalue = it->value;
+struct indexes_request {
+	typedef std::vector<size_t> pos_t;
 
-		if (!avalue.IsString())
-			continue;
+	std::vector<greylock::eurl> indexes;
+	std::vector<pos_t> positions;
 
-		std::vector<ribosome::lstring> indexes = spl.convert_split_words(avalue.GetString(), avalue.GetStringLength());
-		for (size_t pos = 0; pos < indexes.size(); ++pos) {
-			std::string iname = index_name(mbox, aname, ribosome::lconvert::to_string(indexes[pos]));
+	std::vector<single_attribute> attributes;
 
-			auto f = iname2pos.find(iname);
-			if (f == iname2pos.end()) {
-				std::vector<size_t> v;
-				v.push_back(pos);
-				iname2pos[iname] = v;
-			} else {
-				f->second.push_back(pos);
+	bool distance_sort(const std::vector<greylock::eurl> &indexes_unused, greylock::intersect::result &res) {
+		(void) indexes_unused;
+
+//#define STDOUT_DEBUG
+#ifdef STDOUT_DEBUG
+		auto print_vector = [] (const std::vector<size_t> &v) {
+			std::ostringstream ss;
+			ss << "[";
+			for (auto it = v.begin(), end = v.end(); it != end;) {
+				ss << (ssize_t)(*it);
+				++it;
+
+				if (it != end)
+					ss << ", ";
+			}
+			ss << "]";
+
+			return ss.str();
+		};
+		auto print_vectors = [&] (const std::vector<pos_t> &v) {
+			std::ostringstream ss;
+			for (auto it = v.begin(), end = v.end(); it != end;) {
+				ss << print_vector(*it);
+				++it;
+
+				if (it != end)
+					ss << ", ";
+			}
+
+			return ss.str();
+		};
+#endif
+
+		for (size_t i = 0; i < indexes.size(); ++i) {
+			const std::string &iname = indexes[i].key;
+
+			for (auto &sa : attributes) {
+				if (iname.find(sa.aname) == 0) {
+					sa.apos.push_back(i);
+					break;
+				}
 			}
 		}
-	}
 
-	return iname2pos;
-}
+		for (auto &doc: res.docs) {
+			for (const auto &sa: attributes) {
+				std::vector<pos_t> positions;
+				for (size_t i = 0; i < sa.apos.size(); ++i) {
+					size_t ipos = sa.apos[i];
+
+					positions.push_back(doc.indexes[ipos].positions);
+#ifdef STDOUT_DEBUG
+					printf("doc: %s, sa: %s, index: %s, positions: %s\n",
+							doc.doc.str().c_str(), sa.aname.c_str(),
+							doc.indexes[ipos].str().c_str(), print_vector(doc.indexes[ipos].positions).c_str());
+#endif
+				}
+
+				std::vector<size_t> pos_idx;
+				// fill in with zeroes, every entry in this array is an offset within corresponding entry in @positions array
+				pos_idx.resize(positions.size());
+
+				// This code converts index positions for given attribute in given document into index vector.
+				//
+				// Given document @doc, let's assume, there are following index positions for @sa attribute:
+				//
+				// idx0 positions: 0, 1, 4, 12
+				// idx1 positions: 3, 7, 15
+				// idx2 positions: 2, 13
+				//
+				//              : 0, 1, 2, 3, 4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15
+				// index vectors: 0, 0, 2, 1, 0
+				//                                        1
+				//                                                            0,  2
+				//                                                                        1
+
+				std::vector<pos_t> dvecs;
+				pos_t current_dvec;
+
+				size_t prev;
+
+				while (true) {
+					size_t min = INT_MAX;
+					int min_pos = -1;
+
+					for (size_t i = 0; i < pos_idx.size(); ++i) {
+						const pos_t &pos_vector = positions[i];
+						size_t pos_offset = pos_idx[i];
+
+						if (pos_offset < pos_vector.size()) {
+							if (pos_vector[pos_offset] < min) {
+								min = pos_vector[pos_offset];
+								min_pos = i;
+							}
+						}
+					}
+
+					if (min_pos == -1) {
+						dvecs.push_back(current_dvec);
+						break;
+					}
+
+					if (current_dvec.size() == 0) {
+						current_dvec.push_back(min_pos);
+						pos_idx[min_pos]++;
+
+						prev = min;
+						continue;
+					}
+
+					if (min != prev + 1) {
+						dvecs.push_back(current_dvec);
+						current_dvec.clear();
+					} else {
+						current_dvec.push_back(min_pos);
+						pos_idx[min_pos]++;
+						prev = min;
+					}
+				}
+#ifdef STDOUT_DEBUG
+				printf("doc: %s, sa: %s, index vectors: %s\n",
+						doc.doc.str().c_str(), sa.aname.c_str(),
+						print_vectors(dvecs).c_str());
+#endif
+				int min_dist = INT_MAX;
+				int min_num = 0;
+				size_t total_length = 0;
+				for (const auto &dvec: dvecs) {
+					// Using sliding window with size equal to @ivec size for given attribute,
+					// compare every subset of index vector with @ivec using Levenstein distance
+					size_t start = 0;
+					while (true) {
+						std::vector<size_t> sub;
+
+						size_t num = dvec.size() - start;
+						if (num > sa.ivec.size())
+							num = sa.ivec.size();
+
+						sub.insert(sub.begin(), dvec.begin() + start, dvec.begin() + start + num);
+
+						int dist = ribosome::distance::levenstein(sa.ivec, sub, INT_MAX);
+						if (dist < min_dist) {
+							min_dist = dist;
+							min_num = 1;
+						} else if (dist == min_dist) {
+							min_num++;
+						}
+#ifdef STDOUT_DEBUG						
+						printf("doc: %s, sa: %s, start: %zd, index vector: %s, dist: %d, min_dist: %d, min_num: %d\n",
+								doc.doc.str().c_str(),
+								sa.aname.c_str(),
+								start,
+								print_vector(sub).c_str(),
+								dist,
+								min_dist,
+								min_num);
+#endif
+
+						if (num < sa.ivec.size())
+							break;
+
+						++start;
+					}
+
+					total_length += dvec.size();
+				}
+
+				doc.relevance = (1.0 - (float)min_dist / (float)sa.ivec.size()) * ((float)min_num / (float)total_length);
+			}
+		}
+
+		std::sort(res.docs.begin(), res.docs.end(), [&]
+				(const greylock::intersect::single_doc_result &d1, const greylock::intersect::single_doc_result &d2) {
+					return d1.relevance > d2.relevance;
+			});
+
+		return true;
+	}
+};
 
 class http_server : public thevoid::server<http_server>
 {
@@ -298,19 +464,7 @@ public:
 				page_start = greylock::get_string(pages, "start", "\0");
 			}
 
-			std::set<greylock::eurl> raw_greylock_set;
-
-			auto iname2pos = get_indexes(mbox, query);
-
-			for (auto idx = iname2pos.begin(), idx_end = iname2pos.end(); idx != idx_end; ++idx) {
-				greylock::eurl start;
-				start.bucket = server()->meta_bucket_name();
-				start.key = idx->first;
-
-				raw_greylock_set.emplace(start);
-			}
-
-			std::vector<greylock::eurl> raw_greylock(raw_greylock_set.begin(), raw_greylock_set.end());
+			auto ireq = server()->get_indexes(mbox, query);
 
 			greylock::intersect::result result;
 			result.cookie = page_start;
@@ -320,12 +474,12 @@ public:
 					req.url().to_human_readable().c_str(), search_tm.elapsed());
 
 			try {
-				intersect(req, raw_greylock, result);
+				intersect(req, ireq, result);
 			} catch (const std::exception &e) {
 				// likely this exception tells that there are no requested indexes
 				// FIXME exception mechanism has to be reworked
 				ILOG_ERROR("url: %s: could not run intersection for %d indexes: %s",
-					req.url().to_human_readable().c_str(), raw_greylock.size(), e.what());
+					req.url().to_human_readable().c_str(), ireq.indexes.size(), e.what());
 				send_search_result(result);
 				return;
 			}
@@ -345,7 +499,7 @@ public:
 			ILOG_INFO("url: %s: requested indexes: %d, requested number of documents: %d, search start: %s, "
 					"found documents: %d, cookie: %s, completed: %d, duration: %d ms",
 					req.url().to_human_readable().c_str(),
-					iname2pos.size(), page_num, page_start.c_str(),
+					ireq.indexes.size(), page_num, page_start.c_str(),
 					result.docs.size(), result.cookie.c_str(), result.completed, search_tm.elapsed());
 		}
 
@@ -367,6 +521,8 @@ public:
 
 				rapidjson::Value idv(doc.id.c_str(), doc.id.size(), allocator);
 				key.AddMember("id", idv, allocator);
+
+				key.AddMember("relevance", it->relevance, allocator);
 
 				rapidjson::Value ts(rapidjson::kObjectType);
 				long tsec, tnsec;
@@ -401,20 +557,18 @@ public:
 			this->send_reply(std::move(reply), std::move(data));
 		}
 
-		bool intersect(const thevoid::http_request &req, const std::vector<greylock::eurl> &raw_greylock,
-				greylock::intersect::result &result) {
+		bool intersect(const thevoid::http_request &req, indexes_request &ireq, greylock::intersect::result &result) {
 			ribosome::timer tm;
 
 			greylock::intersect::intersector<greylock::bucket_transport> p(*(server()->bucket()));
 
 			std::vector<locker<http_server>> lockers;
-			// this reserve is absolutely needed, since elements of vector of unique locks
-			// use references to this array to grab locker's state
-			lockers.reserve(raw_greylock.size());
+			lockers.reserve(ireq.indexes.size());
 
 			std::vector<std::unique_lock<locker<http_server>>> locks;
-			locks.reserve(raw_greylock.size());
-			for (auto it = raw_greylock.begin(), end = raw_greylock.end(); it != end; ++it) {
+			locks.reserve(ireq.indexes.size());
+
+			for (auto it = ireq.indexes.begin(), end = ireq.indexes.end(); it != end; ++it) {
 				locker<http_server> l(server(), it->str());
 				lockers.emplace_back(std::move(l));
 
@@ -423,17 +577,16 @@ public:
 			}
 
 			ILOG_INFO("url: %s: locks: %d: intersection locked: duration: %d ms",
-					req.url().to_human_readable().c_str(),
-					raw_greylock.size(),
-					tm.elapsed());
+					req.url().to_human_readable().c_str(), ireq.indexes.size(), tm.elapsed());
 
 			ribosome::timer intersect_tm;
-			result = p.intersect(raw_greylock, result.cookie, result.max_number_of_documents);
+			result = p.intersect(ireq.indexes, result.cookie, result.max_number_of_documents,
+					std::bind(&indexes_request::distance_sort, &ireq, std::placeholders::_1, std::placeholders::_2));
 
 			ILOG_INFO("url: %s: locks: %d: completed: %d, result keys: %d, requested num: %d, page start: %s: "
 					"intersection completed: duration: %d ms, whole duration: %d ms",
 					req.url().to_human_readable().c_str(),
-					raw_greylock.size(), result.completed, result.docs.size(),
+					ireq.indexes.size(), result.completed, result.docs.size(),
 					result.max_number_of_documents, result.cookie.c_str(),
 					intersect_tm.elapsed(), tm.elapsed());
 
@@ -451,22 +604,21 @@ public:
 					req.url().to_human_readable().c_str(), mbox,
 					doc.str().c_str());
 
-			auto iname2pos = get_indexes(mbox, idxs);
+			auto ireq = server()->get_indexes(mbox, idxs);
 
-			for (auto idx = iname2pos.begin(), idx_end = iname2pos.end(); idx != idx_end; ++idx) {
+			for (size_t i = 0; i < ireq.indexes.size(); ++i) {
+				greylock::eurl &iname = ireq.indexes[i];
+				std::vector<size_t> &positions = ireq.positions[i];
+
 				// for every index we put vector of positions where given index is located in the document
 				// since it is an inverted index, it contains list of document links each of which contains
 				// array of the positions, where given index lives in the document
-				doc.positions.swap(idx->second);
+				doc.positions.swap(positions);
 
-				greylock::eurl start;
-				start.bucket.assign(server()->meta_bucket_name());
-				start.key.assign(idx->first);
-
-				locker<http_server> l(server(), start.str());
+				locker<http_server> l(server(), iname.str());
 				std::unique_lock<locker<http_server>> lk(l);
 
-				greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), start);
+				greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), iname);
 
 				int err = index.insert(doc);
 				if (err < 0) {
@@ -474,7 +626,7 @@ public:
 							"doc: %s, index: %s error: %d: could not insert new key",
 						req.url().to_human_readable().c_str(), mbox,
 						doc.str().c_str(),
-						start.str().c_str(),
+						iname.str().c_str(),
 						err);
 					this->send_reply(swarm::http_response::internal_server_error);
 					return;
@@ -484,13 +636,13 @@ public:
 						"doc: %s, index: %s, elapsed time: %d ms",
 					req.url().to_human_readable().c_str(), mbox,
 					doc.str().c_str(),
-					start.str().c_str(),
+					iname.str().c_str(),
 					tm.restart());
 			}
 
 			ILOG_INFO("process_one_document: url: %s, mailbox: %s, doc: %s, total number of indexes: %d, elapsed time: %d ms",
 					req.url().to_human_readable().c_str(), mbox,
-					doc.str().c_str(), iname2pos.size(), all_tm.elapsed());
+					doc.str().c_str(), ireq.indexes.size(), all_tm.elapsed());
 		}
 
 		void parse_docs(const thevoid::http_request &req, const std::string &mbox, const rapidjson::Value &docs) {
@@ -587,6 +739,51 @@ public:
 	const std::string &meta_bucket_name() const {
 		return m_meta_bucket;
 	}
+
+	indexes_request get_indexes(const std::string &mbox, const rapidjson::Value &idxs) {
+		indexes_request ireq;
+
+		if (!idxs.IsObject())
+			return ireq;
+
+		ribosome::split spl;
+		for (rapidjson::Value::ConstMemberIterator it = idxs.MemberBegin(), idxs_end = idxs.MemberEnd(); it != idxs_end; ++it) {
+			const char *aname = it->name.GetString();
+			const rapidjson::Value &avalue = it->value;
+
+			if (!avalue.IsString())
+				continue;
+
+			single_attribute sa;
+			sa.aname = index_name(mbox, aname, "");
+
+			std::vector<ribosome::lstring> indexes = spl.convert_split_words(avalue.GetString(), avalue.GetStringLength());
+			for (size_t pos = 0; pos < indexes.size(); ++pos) {
+				greylock::eurl url;
+				url.bucket = meta_bucket_name();
+				url.key = index_name(mbox, aname, ribosome::lconvert::to_string(indexes[pos]));
+
+				auto f = std::find(ireq.indexes.begin(), ireq.indexes.end(), url);
+				if (f == ireq.indexes.end()) {
+					std::vector<size_t> v;
+					v.push_back(pos);
+					ireq.positions.push_back(v);
+					ireq.indexes.push_back(url);
+
+					sa.ivec.push_back(pos);
+				} else {
+					size_t idx = std::distance(ireq.indexes.begin(), f);
+					ireq.positions[idx].push_back(pos);
+					sa.ivec.push_back(idx);
+				}
+			}
+
+			ireq.attributes.push_back(sa);
+		}
+
+		return ireq;
+	}
+
 
 private:
 	vector_lock m_lock;
@@ -753,6 +950,12 @@ private:
 
 		return true;
 	}
+
+	std::string index_name(const std::string &mbox, const std::string &aname, const std::string &iname) {
+		std::string ret = std::string(mbox) + "." + std::string(aname) + "." + std::string(iname);
+		return ret;
+	}
+
 };
 
 int main(int argc, char **argv)

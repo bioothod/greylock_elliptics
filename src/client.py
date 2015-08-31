@@ -92,7 +92,7 @@ class content_parser(HTMLParser):
     # tags may contain meaningful data too
     def handle_starttag(self, tag, attrs):
         for a in attrs:
-            self.handle_data(a)
+            self.handle_data(a[1])
 
         self.handle_data(tag)
 
@@ -288,7 +288,8 @@ class search_machine():
         for k in res["ids"]:
             ts = k["timestamp"]
             l = time.localtime(ts["tsec"])
-            print "bucket: '%s', key: '%s', id: '%s', ts: %s.%09d" % (k["bucket"], k["key"], k["id"],
+            print "bucket: '%s', key: '%s', id: '%s', relevance: %f, ts: %s.%09d" % (k["bucket"], k["key"], k["id"],
+                    k["relevance"],
                     time.strftime("%Y-%m-%d %H:%M:%S", l), ts["tnsec"])
 
     def search_multiple_urls(self, urls, text, attrs, paging_start, paging_num):

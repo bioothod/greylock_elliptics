@@ -13,6 +13,8 @@ struct single_doc_result {
 	// @bucket/@key pair contains elliptics credentials to read the doc (if was specified at insertion time)
 	key doc;
 
+	float relevance = 0;
+
 	// every entry in this array corresponds to one of the requested index name,
 	// array size will always be equal to requested number of indexes
 	//
@@ -43,6 +45,10 @@ public:
 		return intersect(indexes, start, INT_MAX);
 	}
 
+	result intersect(const std::vector<eurl> &indexes, std::string &start, size_t num) const {
+		return intersect(indexes, start, num, [&] (const std::vector<eurl> &, result &) {return true;});
+	}
+
 	// search for intersections between all @indexes
 	// starting with the key @start, returning at most @num entries
 	//
@@ -54,13 +60,16 @@ public:
 	// after call to this function returns, then intersection is completed.
 	//
 	// @result.completed will be set to true in this case.
-	result intersect(const std::vector<eurl> &indexes, std::string &start, size_t num) const {
+	result intersect(const std::vector<eurl> &indexes, std::string &start, size_t num,
+			const std::function<bool (const std::vector<eurl> &, result &)> &finish) const {
 		struct iter {
 			read_only_index<T> idx;
 			greylock::iterator<T> begin, end;
 
-			iter(T &t, const eurl &name, const std::string &start) :
-				idx(t, name), begin(idx.begin(start)), end(idx.end()) {}
+			iter(T &t, const eurl &iname, const std::string &start) :
+				idx(t, iname),
+				begin(idx.begin(start)), end(idx.end())
+			{}
 		};
 
 		// contains vector of iterators pointing to the requested indexes
@@ -69,15 +78,14 @@ public:
 		std::vector<iter> idata;
 		idata.reserve(indexes.size());
 
-		for_each(indexes.begin(), indexes.end(), [&] (const eurl &name) {
-				iter it(m_t, name, start);
-
-				idata.emplace_back(std::move(it));
-			});
+		for (auto it = indexes.begin(), end = indexes.end(); it != end; ++it) {
+			iter itr(m_t, *it, start);
+			idata.emplace_back(std::move(itr));
+		}
 
 		result res;
 
-		while (!res.completed) {
+		while (true) {
 			// contains indexes within @idata array of iterators,
 			// each iterator contains the same and smallest to the known moment reference to the document (i.e. document ID)
 			//
@@ -184,6 +192,8 @@ public:
 
 			if (res.completed) {
 				start.clear();
+				if (!finish(indexes, res))
+					continue;
 				break;
 			}
 
@@ -198,12 +208,15 @@ public:
 
 			start = idata[pos[0]].begin->id;
 			if (res.docs.size() == num) {
+				if (!finish(indexes, res))
+					continue;
 				break;
 			}
 
 			single_doc_result rs;
 			for (auto it = pos.begin(); it != pos.end(); ++it) {
-				auto &min_it = idata[*it].begin;
+				auto &idata_iter = idata[*it];
+				auto &min_it = idata_iter.begin;
 				key k = *min_it;
 
 				if (it == pos.begin()) {
