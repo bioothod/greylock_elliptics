@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import requests
+import sys
 import time
 
 logging.basicConfig(filename='perf.log',
@@ -36,6 +37,9 @@ class client:
     def gen_indexes(self, num):
         for i in range(num):
             self.indexes.append(self.rand_string(random.randint(5, 20)))
+
+    def get_all_indexes(self):
+        return self.indexes
 
     def get_indexes(self):
         return random.sample(self.indexes, self.max_indexes_per_message)
@@ -101,6 +105,8 @@ if __name__ == '__main__':
             help='Number of random indexes (out of pregenerated max indexes) per message')
     parser.add_argument('--seed', dest='seed', action='store', default=time.time(),
             help='Random number generator seed')
+    parser.add_argument('--store-indexes', dest='ifile', type=argparse.FileType('w'), default=sys.stdout,
+            help='File to store all random indexes')
 
     args = parser.parse_args()
     if not args.mailbox:
@@ -108,4 +114,6 @@ if __name__ == '__main__':
         exit(-1)
 
     c = client(seed = args.seed, indexes_per_message = args.indexes_per_message, num_indexes = args.num_indexes, mailbox = args.mailbox)
+    args.ifile.write('\n'.join(c.get_all_indexes()))
+
     c.test(args.url)
