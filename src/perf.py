@@ -13,7 +13,7 @@ logging.basicConfig(filename='perf.log',
 logging.getLogger().setLevel(logging.INFO)
 
 class client:
-    def __init__(self, seed, indexes_per_message, num_indexes):
+    def __init__(self, seed, indexes_per_message, num_indexes, mailbox):
         random.seed(seed)
 
         self.max = 10000000
@@ -22,6 +22,8 @@ class client:
         self.indexes = []
         self.num_indexes = num_indexes
         self.gen_indexes(self.num_indexes)
+
+        self.mailbox = mailbox
 
         self.max_indexes_per_message = indexes_per_message
 
@@ -40,25 +42,26 @@ class client:
 
     def format_elliptics(self):
 
-        indexes = []
-        pos = 0
-        for idx in self.get_indexes():
-            i = {}
-            i['name'] = idx
-            i['positions'] = pos
-            pos += 1
+        indexes = {}
+        indexes['text'] = ' '.join(self.get_indexes())
 
-            indexes.append(i)
+        ts = {}
+        t = time.time()
+        ts["tsec"] = int(t)
+        ts["tnsec"] = int((t - int(t)) * 1000000000)
 
-        raw = {}
-        raw['id'] = self.msg_id()
-        raw['bucket'] = ""
-        raw['key'] = ""
-        raw['indexes'] = indexes
+        doc = {}
+        doc['id'] = self.msg_id()
+        doc['bucket'] = ""
+        doc['key'] = ""
+        doc['timestamp'] = ts
+        doc['index'] = indexes
 
-        msg = {}
-        msg['ids'] = [raw]
-        return json.dumps(msg, encoding='utf8', ensure_ascii=False)
+        docs = {}
+        docs['docs'] = [doc]
+        docs['mailbox'] = self.mailbox
+
+        return json.dumps(docs, encoding='utf8', ensure_ascii=False)
 
     def send(self, url, data):
         headers = {}
@@ -90,6 +93,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Performance tester arguments')
     parser.add_argument('--url', dest='url', action='store', required=True,
             help='Remote URL to send index request')
+    parser.add_argument('--mailbox', dest='mailbox', action='store', default='test@mailbox',
+            help='Mailbox name where all inverted indexes will be stored')
     parser.add_argument('--num-indexes', dest='num_indexes', action='store', default=3000,
             help='Number of pregenerated indexes, every message to be indexed will contain subset of these indexes')
     parser.add_argument('--indexes-per-message', dest='indexes_per_message', action='store', default=1000,
@@ -98,5 +103,9 @@ if __name__ == '__main__':
             help='Random number generator seed')
 
     args = parser.parse_args()
-    c = client(seed = args.seed, indexes_per_message = args.indexes_per_message, num_indexes = args.num_indexes)
+    if not args.mailbox:
+        print("You must specify mailbox name to store all inverted indexes")
+        exit(-1)
+
+    c = client(seed = args.seed, indexes_per_message = args.indexes_per_message, num_indexes = args.num_indexes, mailbox = args.mailbox)
     c.test(args.url)
