@@ -61,3 +61,8 @@ on the client side. This is not a part of the search engine, but we will describ
 documentation.
 * Set of features is rather limited, but these are trully what we use in daily basis, so we decided
 not to overengineer the solution. New features will be added when required.
+* Only string indexes are supported. There are no numeric indexes, but every key added into index
+has a timestamp (uint64_t) and keys are sorted by timestamp + string ID. We do not yet support numerics
+since these indexes will have different sorting order and thus paginated read will have to fetch whole
+indexes, intersect them and return needed number of records. This will be slow for really large indexes.
+But we do have plans to introduce numeric indexes.
