@@ -50,6 +50,14 @@ Because of this we do not have embedded natural language processing like lemmati
 Instead we build microservice architecture where NLP tasks are separated into its own service.
 We will release it soon too.
 
+# Examples
+`conf/` directory among others contains `greylock_server` HTTP server config and insert/select json
+files which are examples of the appropriate operations over HTTP. Files include all supported features.
+To search and index via HTTP API one has to use `/search` and `/index` URLs accordingly.
+Host and port where `greylock_server` HTTP server listens for incoming connection is specified
+in its config in `endpoints` section. The most vital part - Elliptics connection and buckets
+are in `application` section, which will be described in details in documentation.
+
 # Issues
 * Automatic scaling does has its price - Elliptics and Greylock are both built as an eventual consistency
 systems, which means consistency is not guaranteed after some types of errors until recovery strikes in.
