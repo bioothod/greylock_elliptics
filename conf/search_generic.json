@@ -1,0 +1,12 @@
+{
+	"mailbox": "namespace where all related indexes are stored",
+	"paging": {
+		"num": 100,
+		"start": "cookie to start subsequent search, it is returned in every search reply"
+	},
+	"query": {
+		"attribute key": "value",
+		"some different attribute": "attribute data",
+		"text key": "search query"
+	}
+}
