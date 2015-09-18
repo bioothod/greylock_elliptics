@@ -247,7 +247,7 @@ class search_machine():
         print js
 
         headers = {}
-        timeout = len(words) / 50 + 10
+        timeout = len(text) / 50 + 10
 
         r = requests.post(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
         if r.status_code != requests.codes.ok:
@@ -275,7 +275,7 @@ class search_machine():
         print js
 
         headers = {}
-        timeout = len(words) / 100 + 10
+        timeout = len(text) / 100 + 10
 
         r = requests.post(url, data=js.decode('unicode_internal').encode('utf8'), headers=headers, timeout=timeout)
         if r.status_code != requests.codes.ok:

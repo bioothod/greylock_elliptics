@@ -181,12 +181,12 @@ if __name__ == '__main__':
         sm = search_machine(p.mailbox)
 
         normalize_services = c.get_normalize_services()
-        if len(normalize_services) == 0:
-            logging.error("There are no normalize services available, exiting.")
-            exit(-1)
-
-        url = random.choice(normalize_services).url()
-        words = sm.normalize(url, p.words)
+        if len(normalize_services) != 0:
+            url = random.choice(normalize_services).url()
+            words = sm.normalize(url, p.words)
+            text = ' '.join(words)
+        else:
+            text = ' '.join(p.words)
 
         index_services = c.get_index_services()
         if len(index_services) == 0:
@@ -197,7 +197,7 @@ if __name__ == '__main__':
 
         c.lock(p.mailbox)
         try:
-            sm.index(index_url, words, p.attrs, p.id, args.bucket, args.key)
+            sm.index(index_url, text, p.attrs, p.id, args.bucket, args.key)
         except Exception as e:
             logging.error("index exception: url: %s, id: %s: %s", index_url, p.id, e)
 
@@ -223,12 +223,10 @@ if __name__ == '__main__':
         sm = search_machine(args.mailbox)
 
         normalize_services = c.get_normalize_services()
-        if len(normalize_services) == 0:
-            logging.error("There are no normalize services available, exiting.")
-            exit(-1)
-
-        url = random.choice(normalize_services).url()
-        words = sm.normalize(url, words)
+        if len(normalize_services) != 0:
+            url = random.choice(normalize_services).url()
+            words = sm.normalize(url, words)
+        text = ' '.join(words)
 
         search_services = c.get_search_services()
         if len(search_services) == 0:
@@ -239,7 +237,7 @@ if __name__ == '__main__':
 
         c.lock(args.mailbox)
         try:
-            sm.search(search_url, words, attrs, args.page_start, args.page_num)
+            sm.search(search_url, text, attrs, args.page_start, args.page_num)
         except Exception as e:
             logging.error("search exception: url: %s: %s", search_url, e)
 
