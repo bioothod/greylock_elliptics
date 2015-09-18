@@ -438,6 +438,21 @@ public:
 			rapidjson::Document doc;
 			doc.Parse<0>(data.c_str());
 
+			if (doc.HasParseError()) {
+				ILOG_ERROR("on_request: url: %s, error: %d: could not parse document: %s, error offset: %d",
+						req.url().to_human_readable().c_str(), -EINVAL, doc.GetParseError(), doc.GetErrorOffset());
+				this->send_reply(swarm::http_response::bad_request);
+				return;
+			}
+
+
+			if (!doc.IsObject()) {
+				ILOG_ERROR("on_request: url: %s, error: %d: document must be object",
+						req.url().to_human_readable().c_str(), -EINVAL);
+				this->send_reply(swarm::http_response::bad_request);
+				return;
+			}
+
 			const char *mbox = greylock::get_string(doc, "mailbox");
 			if (!mbox) {
 				ILOG_ERROR("on_request: url: %s, error: %d: 'mailbox' must be a string",
@@ -699,6 +714,20 @@ public:
 
 			rapidjson::Document doc;
 			doc.Parse<0>(data.c_str());
+
+			if (doc.HasParseError()) {
+				ILOG_ERROR("on_request: url: %s, error: %d: could not parse document: %s, error offset: %d",
+						req.url().to_human_readable().c_str(), -EINVAL, doc.GetParseError(), doc.GetErrorOffset());
+				this->send_reply(swarm::http_response::bad_request);
+				return;
+			}
+
+			if (!doc.IsObject()) {
+				ILOG_ERROR("on_request: url: %s, error: %d: document must be object, its type: %d",
+						req.url().to_human_readable().c_str(), -EINVAL, doc.GetType());
+				this->send_reply(swarm::http_response::bad_request);
+				return;
+			}
 
 			const char *mbox = greylock::get_string(doc, "mailbox");
 			if (!mbox) {
