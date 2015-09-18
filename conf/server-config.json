@@ -50,7 +50,6 @@
 	    "bucket:32.11"
 	],
 	"meta-bucket": "b1",
-	"lock-num": 1024,
 	"max-page-size": 6144,
 	"reserve-size": 1536
     }
