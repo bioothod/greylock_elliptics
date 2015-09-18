@@ -7,6 +7,6 @@
 	"query": {
 		"attribute key": "value",
 		"some different attribute": "attribute data",
-		"text key": "search query",
+		"text key": "search query"
 	}
 }
