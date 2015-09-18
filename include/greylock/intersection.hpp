@@ -24,7 +24,7 @@ struct single_doc_result {
 };
 
 struct result {
-	bool completed = false;
+	bool completed = true;
 
 	// This will contain a cookie which must be used for the next intersection request,
 	// if current request is not complete. This may happen when client has requested limited
@@ -171,6 +171,8 @@ public:
 					res.completed = true;
 					break;
 				}
+
+				res.completed = false;
 
 				if (pos.size() == 0) {
 					pos.push_back(current);
