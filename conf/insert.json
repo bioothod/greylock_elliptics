@@ -16,7 +16,6 @@
 				"another key": "another value",
 				"some different attribute": "attribute data",
 				"text key": "All fields in 'index' object will be split into key/value pairs where 'key' is attribute name ('attribute key', 'another key', 'text key' and so on) and 'value' is text strings split to single-word tokens ('value', 'another' and so on). When searching one has to specify attribute names and values. Search and indexing are performed within 'mailbox' namespace."
-				]
 			}
 		},
 		{
