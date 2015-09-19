@@ -61,7 +61,7 @@ public:
 		std::unique_lock<std::mutex> lock(m_sync_lock);
 		auto it = m_locks.find(key);
 		if (it == m_locks.end()) {
-			m_locks.emplace(std::pair<std::string, lock_entry_ptr>(key, new_lock_entry_ptr(true)));
+			m_locks.insert(std::pair<std::string, lock_entry_ptr>(key, new_lock_entry_ptr(true)));
 			return;
 		}
 
@@ -77,7 +77,7 @@ public:
 		std::unique_lock<std::mutex> lock(m_sync_lock);
 		auto it = m_locks.find(key);
 		if (it == m_locks.end()) {
-			m_locks.emplace(std::pair<std::string, lock_entry_ptr>(key, new_lock_entry_ptr(true)));
+			m_locks.insert(std::pair<std::string, lock_entry_ptr>(key, new_lock_entry_ptr(true)));
 			return true;
 		}
 
