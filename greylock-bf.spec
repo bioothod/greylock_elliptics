@@ -10,7 +10,7 @@ Source0:	%{name}-%{version}.tar.bz2
 BuildRoot:	%{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 
-BuildRequires:	ribosome, elliptics-devel, elliptics-client
+BuildRequires:	ribosome, elliptics-devel, elliptics-client-devel
 BuildRequires:	libswarm3-devel, libthevoid3-devel
 BuildRequires:	boost-devel, boost-system, boost-program-options, boost-filesystem
 BuildRequires:	msgpack-devel, lz4-devel
