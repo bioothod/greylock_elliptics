@@ -633,16 +633,27 @@ public:
 				locker<http_server> l(server(), iname.str());
 				std::unique_lock<locker<http_server>> lk(l);
 
-				greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), iname);
+				try {
+					greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), iname);
 
-				int err = index.insert(doc);
-				if (err < 0) {
+					int err = index.insert(doc);
+					if (err < 0) {
+						ILOG_ERROR("process_one_document: url: %s, mailbox: %s, "
+								"doc: %s, index: %s error: %d: could not insert new key",
+							req.url().to_human_readable().c_str(), mbox,
+							doc.str().c_str(),
+							iname.str().c_str(),
+							err);
+						this->send_reply(swarm::http_response::internal_server_error);
+						return;
+					}
+				} catch (const std::exception &e) {
 					ILOG_ERROR("process_one_document: url: %s, mailbox: %s, "
-							"doc: %s, index: %s error: %d: could not insert new key",
+							"doc: %s, index: %s, exception: %s",
 						req.url().to_human_readable().c_str(), mbox,
 						doc.str().c_str(),
 						iname.str().c_str(),
-						err);
+						e.what());
 					this->send_reply(swarm::http_response::internal_server_error);
 					return;
 				}
