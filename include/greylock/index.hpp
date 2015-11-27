@@ -339,7 +339,16 @@ private:
 	eurl meta_key() const {
 		eurl ret;
 		ret.bucket = m_sk.bucket;
-		ret.key = m_sk.key + ".meta";
+
+		char zk[m_sk.key.size() + 16];
+		size_t sz = snprintf(zk, sizeof(zk), "%s", m_sk.key.c_str());
+		zk[sz++] = '\0';
+		zk[sz++] = 'm';
+		zk[sz++] = 'e';
+		zk[sz++] = 't';
+		zk[sz++] = 'a';
+
+		ret.key.assign(zk, sz);
 		return ret;
 	}
 
@@ -350,7 +359,8 @@ private:
 		std::string ms = ss.str();
 		m_t.write(meta_key(), ms, true);
 
-		BH_LOG(m_log, INDEXES_LOG_INFO, "index: meta updated: %s, size: %d", m_meta.str().c_str(), ms.size());
+		BH_LOG(m_log, INDEXES_LOG_INFO, "index: meta updated: key: %s, meta: %s, size: %d",
+				meta_key().str(), m_meta.str().c_str(), ms.size());
 	}
 
 	void start_page_init() {
