@@ -78,7 +78,6 @@ public:
 
 	std::vector<status> write(const std::vector<int> groups, const greylock::eurl &key,
 			const std::string &data, size_t reserve_size, bool cache) {
-		dprintf("elliptics write: key: %s, data-size: %zd\n", key.c_str(), size);
 		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
 
 		elliptics::session s = session(groups, cache);
@@ -109,6 +108,10 @@ public:
 		memcpy(&ctl.id, &id.id(), sizeof(ctl.id));
 
 		ctl.fd = -1;
+
+		BH_LOG(logger(), DNET_LOG_NOTICE, "%s: elliptics write: key: %s, data-size: %d, reserve-size: %d, cache: %d\n",
+				dnet_dump_id(&id.id()),
+				key.str().c_str(), data.size(), reserve_size, cache);
 
 		std::vector<status> ret;
 		elliptics::sync_write_result res = s.write_data(ctl).get();

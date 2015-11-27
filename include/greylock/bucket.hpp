@@ -219,6 +219,11 @@ public:
 
 		ctl.fd = -1;
 
+		BH_LOG(m_node->get_log(), DNET_LOG_NOTICE,
+				"%s: bucket write: bucket: %s, key: %s, data-size: %d, reserve-size: %d, cache: %d\n",
+				dnet_dump_id(&id.id()),
+				m_meta.name.c_str(), key.c_str(), data.size(), reserve_size, cache);
+
 		std::vector<status> ret;
 		elliptics::sync_write_result res = s.write_data(ctl).get();
 		for (auto it = res.begin(), end = res.end(); it != end; ++it) {
