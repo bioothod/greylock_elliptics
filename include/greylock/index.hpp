@@ -3,16 +3,8 @@
 
 #include "greylock/page.hpp"
 
-#include <blackhole/blackhole.hpp>
-
 #include <atomic>
 #include <map>
-
-#define INDEXES_LOG_ERROR blackhole::defaults::severity::error
-#define INDEXES_LOG_WARNING blackhole::defaults::severity::warning
-#define INDEXES_LOG_INFO blackhole::defaults::severity::info
-#define INDEXES_LOG_NOTICE blackhole::defaults::severity::notice
-#define INDEXES_LOG_DEBUG blackhole::defaults::severity::debug
 
 namespace ioremap { namespace greylock {
 
@@ -224,6 +216,10 @@ public:
 
 	index_meta meta() const {
 		return m_meta;
+	}
+
+	const eurl &start() const {
+		return m_sk;
 	}
 
 	key search(const key &obj) const {
