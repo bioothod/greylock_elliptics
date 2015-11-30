@@ -107,7 +107,10 @@ class raw_bucket {
 public:
 	raw_bucket(std::shared_ptr<elliptics::node> &node, const std::vector<int> mgroups, const std::string &name) :
 	m_node(node),
-	m_meta_groups(mgroups) {
+	m_meta_groups(mgroups),
+	m_valid(false),
+	m_reloaded(false)
+	{
 		m_meta.name = name;
 		reload();
 	}
@@ -343,7 +346,6 @@ private:
 		if (error) {
 			BH_LOG(log, DNET_LOG_ERROR, "reload_completed: bucket: %s: could not reload: %s, error: %d",
 					m_meta.name.c_str(), error.message().c_str(), error.code());
-			m_valid = false;
 		} else {
 			meta_unpack(result);
 		}
@@ -362,19 +364,20 @@ private:
 			msgpack::unpacked msg;
 			msgpack::unpack(&msg, file.data<char>(), file.size());
 
-			std::unique_lock<std::mutex> guard(m_lock);
-			msg.get().convert(&m_meta);
+			bucket_meta tmp;
+
+			msg.get().convert(&tmp);
 
 			std::ostringstream ss;
-			std::copy(m_meta.groups.begin(), m_meta.groups.end(), std::ostream_iterator<int>(ss, ":"));
-
-			m_valid = true;
+			std::copy(tmp.groups.begin(), tmp.groups.end(), std::ostream_iterator<int>(ss, ":"));
 
 			BH_LOG(log, DNET_LOG_INFO, "meta_unpack: bucket: %s, acls: %ld, flags: 0x%lx, groups: %s",
 					m_meta.name.c_str(), m_meta.acl.size(), m_meta.flags, ss.str().c_str());
-		} catch (const std::exception &e) {
-			m_valid = false;
 
+			std::unique_lock<std::mutex> guard(m_lock);
+			std::swap(m_meta, tmp);
+			m_valid = true;
+		} catch (const std::exception &e) {
 			BH_LOG(log, DNET_LOG_ERROR, "meta_unpack: bucket: %s, exception: %s",
 					m_meta.name.c_str(), e.what());
 		}
