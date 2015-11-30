@@ -48,7 +48,7 @@ struct key {
 		return (timestamp == other.timestamp) && (id == other.id);
 	}
 	bool operator!=(const key &other) const {
-		return id != other.id;
+		return id != other.id || (timestamp != other.timestamp);
 	}
 
 	operator bool() const {
