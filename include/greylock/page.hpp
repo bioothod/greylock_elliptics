@@ -148,7 +148,7 @@ struct page {
 
 		replaced = false;
 
-		for (auto it = objects.begin(); it != objects.end(); ++it) {
+		for (auto it = objects.begin(), end = objects.end(); it != end; ++it) {
 			if (obj <= *it) {
 				copy.push_back(obj);
 				total_size += obj.size();
@@ -173,16 +173,26 @@ struct page {
 		}
 
 		if (total_size > max_page_size) {
-			size_t split_idx = copy.size() / 2;
+			ssize_t split_idx = copy.size() / 2;
 
 			other.flags = flags;
-			other.objects = std::vector<key>(std::make_move_iterator(copy.begin() + split_idx),
-							 std::make_move_iterator(copy.end()));
-			other.recalculate_size();
+			other.objects.clear();
+			other.total_size = 0;
 
-			copy.erase(copy.begin() + split_idx, copy.end());
-			objects.swap(copy);
-			recalculate_size();
+			objects.clear();
+			total_size = 0;
+
+			for (auto it = copy.begin(), end = copy.end(); it != end; ++it) {
+				if (split_idx >= 0) {
+					objects.push_back(*it);
+					total_size += it->size();
+				} else {
+					other.objects.push_back(*it);
+					other.total_size += it->size();
+				}
+
+				--split_idx;
+			}
 
 			dprintf("insert/split: %s: split: %s %s\n", obj.str().c_str(), str().c_str(), other.str().c_str());
 
@@ -380,9 +390,19 @@ static inline ioremap::greylock::page &operator >>(msgpack::object o, ioremap::g
 		p[2].convert(&page.next);
 
 		switch (version) {
-		case ioremap::greylock::page::serialization_version_raw:
-			p[3].convert(&page.objects);
+		case ioremap::greylock::page::serialization_version_raw: {
+			msgpack::unpacked result;
+
+			const char *src = p[3].via.raw.ptr;
+			size_t src_size = p[3].via.raw.size;
+
+			msgpack::unpack(&result, src, src_size);
+			msgpack::object obj = result.get();
+
+			obj.convert(&page.objects);
+			page.recalculate_size();
 			break;
+		}
 		case ioremap::greylock::page::serialization_version_packed: {
 			msgpack::unpacked result;
 
@@ -484,7 +504,8 @@ template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::greylock::page &p)
 {
 	o.pack_array(4);
-	o.pack((int)ioremap::greylock::page::serialization_version_packed);
+	//o.pack((int)ioremap::greylock::page::serialization_version_packed);
+	o.pack((int)ioremap::greylock::page::serialization_version_raw);
 	o.pack(p.flags);
 	o.pack(p.next);
 
@@ -492,7 +513,7 @@ inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const io
 	msgpack::pack(ss, p.objects);
 
 	const std::string &s = ss.str();
-
+#if 0
 	size_t max_size = LZ4F_compressFrameBound(s.size(), NULL);
 	std::string buf;
 	buf.resize(max_size);
@@ -514,7 +535,10 @@ inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const io
 	o.pack_raw_body(buf.data(), buf.size());
 
 	dprintf("pack: objects: %zd, total_size: %zd, data size: %zd -> %zd\n", p.objects.size(), p.total_size, s.size(), buf.size());
-
+#else
+	o.pack_raw(s.size());
+	o.pack_raw_body(s.data(), s.size());
+#endif
 	return o;
 }
 
