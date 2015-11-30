@@ -181,6 +181,10 @@ public:
 
 				auto &min_it = idata[pos[0]].begin;
 
+				BH_LOG(m_t.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s, it-index: %s, id: %s",
+						idata[pos[0]].idx.start().str(), min_it->str(),
+						idata_it->idx.start().str(), it->str());
+
 				if (*it == *min_it) {
 					pos.push_back(current);
 					continue;
@@ -202,7 +206,16 @@ public:
 			if (pos.size() != idata.size()) {
 				for (auto it = pos.begin(); it != pos.end(); ++it) {
 					auto &min_it = idata[*it].begin;
+
+					auto prev_str = min_it->str();
 					++min_it;
+
+					std::string min_str = "finished";
+					if (min_it != idata[*it].end)
+						min_str = min_it->str();
+
+					BH_LOG(m_t.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s increasing to %s",
+							idata[*it].idx.start().str(), prev_str, min_str);
 				}
 
 				continue;
