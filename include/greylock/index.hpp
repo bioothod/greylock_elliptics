@@ -100,6 +100,8 @@ template <typename T>
 class index {
 public:
 	index(T &t, const eurl &sk, bool read_only): m_t(t), m_log(t.logger()), m_sk(sk), m_read_only(read_only) {
+		generate_meta_key();
+
 		std::vector<status> meta = m_t.read_all(meta_key());
 
 		struct separate_index_meta {
@@ -328,6 +330,7 @@ private:
 	T &m_t;
 	const logger &m_log;
 	eurl m_sk;
+	eurl m_meta_url;
 
 	// when true, metadata for new index will NOT be created and updated at destruction time
 	// should be TRUE for read-only indexes, for example for indexes created to read metadata
@@ -336,20 +339,17 @@ private:
 
 	index_meta m_meta;
 
-	eurl meta_key() const {
-		eurl ret;
-		ret.bucket = m_sk.bucket;
+	const eurl &meta_key() const {
+		return m_meta_url;
+	}
 
-		char zk[m_sk.key.size() + 16];
-		size_t sz = snprintf(zk, sizeof(zk), "%s", m_sk.key.c_str());
-		zk[sz++] = '\0';
-		zk[sz++] = 'm';
-		zk[sz++] = 'e';
-		zk[sz++] = 't';
-		zk[sz++] = 'a';
+	void generate_meta_key() {
+		m_meta_url.bucket = m_sk.bucket;
 
-		ret.key.assign(zk, sz);
-		return ret;
+		const char *mns = "meta\0meta\0";
+		std::string ns(mns, 10);
+
+		m_meta_url.key = m_t.generate(ns, m_sk.key);
 	}
 
 	void meta_write() {
@@ -679,9 +679,8 @@ private:
 		eurl ret;
 		ret.bucket = st.data.to_string();
 
-		ret.key = m_sk.key + "." + elliptics::lexical_cast(m_meta.page_index);
+		ret.key = m_sk.key + "." + elliptics::lexical_cast(m_meta.page_index++);
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key: %s", ret.str().c_str());
-		m_meta.page_index++;
 		return ret;
 	}
 

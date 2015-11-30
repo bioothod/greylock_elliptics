@@ -139,6 +139,17 @@ public:
 		return ret;
 	}
 
+	std::string generate(const std::string &ns, const std::string &key) const {
+		elliptics::session s(*m_node);
+		s.set_namespace(ns.data(), ns.size());
+		elliptics::key k(key);
+		s.transform(k);
+
+		DNET_DUMP_ID_LEN(name, &k.id(), DNET_ID_SIZE);
+		return std::string(name);
+	}
+
+
 private:
 	elliptics::file_logger m_log;
 	std::shared_ptr<elliptics::node> m_node;
