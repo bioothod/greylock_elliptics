@@ -4,6 +4,8 @@
 #include <string>
 #include <msgpack.hpp>
 
+#include <blackhole/blackhole.hpp>
+
 namespace ioremap { namespace greylock {
 
 static size_t max_page_size = 6144;
@@ -11,6 +13,13 @@ static size_t default_reserve_size = max_page_size/4;
 
 #define dprintf(fmt, a...) do {} while (0)
 //#define dprintf(fmt, a...) printf(fmt, ##a)
+
+#define INDEXES_LOG_ERROR blackhole::defaults::severity::error
+#define INDEXES_LOG_WARNING blackhole::defaults::severity::warning
+#define INDEXES_LOG_INFO blackhole::defaults::severity::info
+#define INDEXES_LOG_NOTICE blackhole::defaults::severity::notice
+#define INDEXES_LOG_DEBUG blackhole::defaults::severity::debug
+
 
 struct eurl {
 	std::string bucket;
