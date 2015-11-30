@@ -675,7 +675,7 @@ private:
 		eurl ret;
 		ret.bucket = st.data.to_string();
 
-		ret.key = m_sk.key + "." + elliptics::lexical_cast(m_meta.page_index++);
+		ret.key = m_meta_url.key + "." + elliptics::lexical_cast(m_meta.page_index.fetch_add(1));
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key: %s", ret.str().c_str());
 		return ret;
 	}
