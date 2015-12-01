@@ -16,6 +16,15 @@ target_link_libraries(greylock_meta
 	${LZ4_LIBRARIES}
 )
 
+add_executable(greylock_page_info page_info.cpp)
+target_link_libraries(greylock_page_info
+	${Boost_LIBRARIES}
+	${ELLIPTICS_LIBRARIES}
+	${MSGPACK_LIBRARIES}
+	${RIBOSOME_LIBRARIES}
+	${LZ4_LIBRARIES}
+)
+
 add_executable(greylock_server server.cpp)
 target_link_libraries(greylock_server
 	${Boost_LIBRARIES}
