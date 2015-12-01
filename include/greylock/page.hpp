@@ -105,7 +105,15 @@ struct page {
 		return it - objects.begin();
 	}
 
-	// returns position of the key in @objects vector
+	// returns position in the @objects array of key,
+	// which can be replaced with the @obj and ordering will not change.
+	//
+	// If the first key is larger than @obj, we can replace it with @obj.
+	// If the last key is less than @obj, we can replace it with @obj.
+	// If found key is equal to @obj, we can replace it.
+	// If found key is larger than @obj (which is returned by std::lower_bound()),
+	// we return previous key, which is guaranteed to be less than @obj.
+	// In this case prev < @obj < found key, and we can replace previous entry with @obj.
 	int search_node(const key &obj) const {
 		if (objects.size() == 0)
 			return -1;
@@ -500,12 +508,17 @@ static inline ioremap::greylock::page &operator >>(msgpack::object o, ioremap::g
 	return page;
 }
 
+#define PAGE_COMPRESSION
+
 template <typename Stream>
 inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const ioremap::greylock::page &p)
 {
 	o.pack_array(4);
-	//o.pack((int)ioremap::greylock::page::serialization_version_packed);
+#ifdef PAGE_COMPRESSION
+	o.pack((int)ioremap::greylock::page::serialization_version_packed);
+#else
 	o.pack((int)ioremap::greylock::page::serialization_version_raw);
+#endif
 	o.pack(p.flags);
 	o.pack(p.next);
 
@@ -513,7 +526,8 @@ inline msgpack::packer<Stream> &operator <<(msgpack::packer<Stream> &o, const io
 	msgpack::pack(ss, p.objects);
 
 	const std::string &s = ss.str();
-#if 0
+
+#ifdef PAGE_COMPRESSION
 	size_t max_size = LZ4F_compressFrameBound(s.size(), NULL);
 	std::string buf;
 	buf.resize(max_size);
