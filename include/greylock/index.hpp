@@ -423,13 +423,13 @@ private:
 					page_key.str().c_str(), p.str().c_str(),
 					found_pos);
 
-				// this is not a leaf node, but there is no leaf in @obj.objects
+				// this is not a leaf node, but there are no leafs in @obj.objects
 				// this is the only reason non-leaf page search failed,
 				// thus create new leaf node
 				//
-				// this path can only be taken once - when new empty index has been created
+				// this path can only be taken once - when new empty index is being created
 				key leaf_key;
-				leaf_key.id = obj.id;
+				leaf_key = obj;
 				leaf_key.url = generate_page_url();
 
 				page leaf(true), unused_split;
@@ -471,9 +471,9 @@ private:
 			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: insert: %s: returned: %s -> %s, "
 					"found_pos: %d, found_key: %s, "
 					"rec: page_start: %s, split_key: %s",
-					obj.str().c_str(), page_key.str().c_str(), p.str().c_str(),
-					found_pos, found.str().c_str(),
-					rec.page_start.str().c_str(), rec.split_key.str().c_str());
+					obj.str(), page_key.str(), p.str(),
+					found_pos, found.str(),
+					rec.page_start.str(), rec.split_key.str());
 
 			// true if we should not unwind recursion and just return
 			// false if either split page has to be written or page changed and has to be written
@@ -483,17 +483,19 @@ private:
 				BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: p: %s: replace: key: %s: id: %s -> %s",
 					p.str().c_str(), found.str().c_str(), found.id.c_str(), rec.page_start.id.c_str());
 				found.id = rec.page_start.id;
+				found.timestamp = rec.page_start.timestamp;
 
 				// page has been changed, it must be written into storage
 				want_return = false;
 			}
 
 			if (rec.split_key) {
+				// there is a split page, it was already written into the storage,
+				// now its time to insert it into parent and upate parent
+				//
 				// not a leaf page, do not increment @num_keys
 				p.insert_and_split(rec.split_key, split, replaced);
 
-				// there is a split page, it was already written into the storage,
-				// now its time to insert it into parent and upate parent
 				want_return = false;
 			}
 
@@ -514,8 +516,8 @@ private:
 
 		if (!split.is_empty()) {
 			// generate key for split page
+			rec.split_key = split.objects.front();
 			rec.split_key.url = generate_page_url();
-			rec.split_key.id = split.objects.front().id;
 
 			split.next = p.next;
 			p.next = rec.split_key.url;
@@ -540,8 +542,8 @@ private:
 			// split and old root
 
 			key old_root_key;
+			old_root_key = p.objects.front();
 			old_root_key.url = generate_page_url();
-			old_root_key.id = p.objects.front().id;
 
 			err = check(m_t.write(old_root_key.url, p.save()));
 			if (err)
@@ -627,7 +629,7 @@ private:
 				return 0;
 
 			// the first key of the underlying page has been changed, update appropriate key in the current page
-			found.id = rec.page_start.id;
+			found = p.objects[found_pos] = rec.page_start;
 		}
 
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: returned: %s -> %s, found_pos: %d, found_key: %s",
@@ -642,7 +644,7 @@ private:
 			// we have to update higher level page if start of the current page has been changed
 			// we can not use @found here, since it could be removed from the current page
 			if (found_pos == 0) {
-				rec.page_start.id = p.objects.front().id;
+				rec.page_start = p.objects.front();
 			}
 
 			err = check(m_t.write(page_key, p.save()));
