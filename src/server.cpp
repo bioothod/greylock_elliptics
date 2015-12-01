@@ -205,6 +205,8 @@ struct single_attribute {
 struct indexes_request {
 	typedef std::vector<size_t> pos_t;
 
+	std::ostringstream inames;
+
 	std::vector<greylock::eurl> indexes;
 	std::vector<pos_t> positions;
 
@@ -485,16 +487,16 @@ public:
 			result.cookie = page_start;
 			result.max_number_of_documents = page_num;
 
-			ILOG_INFO("url: %s: starting intersection, json parsing duration: %d ms",
-					req.url().to_human_readable().c_str(), search_tm.elapsed());
+			ILOG_INFO("url: %s: indexes: %s: starting intersection, json parsing duration: %d ms",
+					req.url().to_human_readable(), ireq.inames.str(), search_tm.elapsed());
 
 			try {
 				intersect(req, ireq, result);
 			} catch (const std::exception &e) {
 				// likely this exception tells that there are no requested indexes
 				// FIXME exception mechanism has to be reworked
-				ILOG_ERROR("url: %s: could not run intersection for %d indexes: %s",
-					req.url().to_human_readable().c_str(), ireq.indexes.size(), e.what());
+				ILOG_ERROR("url: %s: indexes: %s: could not run intersection for %d indexes: %s",
+					req.url().to_human_readable(), ireq.inames.str(), ireq.indexes.size(), e.what());
 				send_search_result(result);
 				return;
 			}
@@ -511,11 +513,13 @@ public:
 
 			send_search_result(result);
 
-			ILOG_INFO("url: %s: requested indexes: %d, requested number of documents: %d, search start: %s, "
+			ILOG_INFO("url: %s: indexes: %s: requested indexes: %d, requested number of documents: %d, search start: %s, "
 					"found documents: %d, cookie: %s, completed: %d, duration: %d ms",
-					req.url().to_human_readable().c_str(),
-					ireq.indexes.size(), page_num, page_start.c_str(),
-					result.docs.size(), result.cookie.c_str(), result.completed, search_tm.elapsed());
+					req.url().to_human_readable(),
+					ireq.inames.str(), ireq.indexes.size(),
+					page_num, page_start,
+					result.docs.size(), result.cookie.c_str(), result.completed,
+					search_tm.elapsed());
 		}
 
 		void send_search_result(const greylock::intersect::result &result) {
@@ -591,18 +595,18 @@ public:
 				locks.emplace_back(std::move(lk));
 			}
 
-			ILOG_INFO("url: %s: locks: %d: intersection locked: duration: %d ms",
-					req.url().to_human_readable().c_str(), ireq.indexes.size(), tm.elapsed());
+			ILOG_INFO("url: %s: indexes: %s: intersection locked: duration: %d ms",
+					req.url().to_human_readable(), ireq.inames.str(), tm.elapsed());
 
 			ribosome::timer intersect_tm;
 			result = p.intersect(ireq.indexes, result.cookie, result.max_number_of_documents,
 					std::bind(&indexes_request::distance_sort, &ireq, std::placeholders::_1, std::placeholders::_2));
 
-			ILOG_INFO("url: %s: locks: %d: completed: %d, result keys: %d, requested num: %d, page start: %s: "
+			ILOG_INFO("url: %s: indexes: %s: completed: %d, result keys: %d, requested num: %d, page start: %s: "
 					"intersection completed: duration: %d ms, whole duration: %d ms",
-					req.url().to_human_readable().c_str(),
-					ireq.indexes.size(), result.completed, result.docs.size(),
-					result.max_number_of_documents, result.cookie.c_str(),
+					req.url().to_human_readable(), ireq.inames.str(),
+					result.completed, result.docs.size(),
+					result.max_number_of_documents, result.cookie,
 					intersect_tm.elapsed(), tm.elapsed());
 
 			return result.completed;
@@ -819,6 +823,14 @@ public:
 			}
 
 			ireq.attributes.push_back(sa);
+		}
+
+		for (auto it = ireq.indexes.begin(), end = ireq.indexes.end(); it != end;) {
+			ireq.inames << it->str();
+			++it;
+
+			if (it != end)
+				ireq.inames << " ";
 		}
 
 		return ireq;
