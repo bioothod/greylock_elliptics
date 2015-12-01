@@ -428,7 +428,7 @@ static inline ioremap::greylock::page &operator >>(msgpack::object o, ioremap::g
 					": expected compressed page (version: " << version << ")"
 					", but failed to create decompression context"
 					", error: " << LZ4F_getErrorName(err) <<
-					", code: " << err;
+					", code: " << (int)err;
 				throw std::runtime_error(ss.str());
 			}
 
@@ -442,7 +442,7 @@ static inline ioremap::greylock::page &operator >>(msgpack::object o, ioremap::g
 					": expected compressed page (version: " << version << ")"
 					", but failed to get frame info"
 					", error: " << LZ4F_getErrorName(err) <<
-					", code: " << err;
+					", code: " << (int)err;
 				LZ4F_freeDecompressionContext(dctx);
 				throw std::runtime_error(ss.str());
 			}
@@ -457,38 +457,39 @@ static inline ioremap::greylock::page &operator >>(msgpack::object o, ioremap::g
 
 			std::string dst_string;
 			dst_string.resize(dst_size);
-			char *dst = const_cast<char *>(dst_string.data());
 
-			while (src_size != 0) {
-				size_t dst_orig = dst_size;
-				size_t src_orig = src_size;
+			size_t dst_offset = 0;
+			size_t src_offset = 0;
 
-				// only running decompression once, it should process the whole buffer since
-				// compression runs in one go too
-				err = LZ4F_decompress(dctx, dst, &dst_size, src, &src_size, NULL);
+			while (src_offset != src_size) {
+				char *dst = const_cast<char *>(dst_string.data()) + dst_offset;
+				size_t dst_space = dst_size - dst_offset;
+				size_t src_space = src_size - src_offset;
+
+				err = LZ4F_decompress(dctx, dst, &dst_space, src + src_offset, &src_space, NULL);
 				if (LZ4F_isError(err)) {
 					std::stringstream ss;
 					ss << "page unpack: " << page.str() <<
 						": expected compressed page (version: " << version << ")"
 						", but failed to decompress frame"
 						", error: " << LZ4F_getErrorName(err) <<
-						", code: " << err;
+						", code: " << (int)err;
 					LZ4F_freeDecompressionContext(dctx);
 					throw std::runtime_error(ss.str());
 				}
 
-				dst += dst_size;
-				dst_size = dst_orig - dst_size;
+				dst_offset += dst_space;
+				src_offset += src_space;
 
-				src += src_size;
-				src_size = src_orig - src_size;
+				if (((dst_size - dst_offset < 1024) && (src_size - src_offset > 100)) || (dst_size - dst_offset < 100)) {
+					dst_string.resize(2 * dst_string.size());
+					dst_size = dst_string.size();
+				}
 			}
-
-			dst_string.resize(dst - dst_string.data());
 
 			LZ4F_freeDecompressionContext(dctx);
 
-			msgpack::unpack(&result, dst_string.data(), dst_string.size());
+			msgpack::unpack(&result, dst_string.data(), dst_offset);
 			obj = result.get();
 
 			obj.convert(&page.objects);
