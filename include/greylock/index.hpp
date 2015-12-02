@@ -128,7 +128,7 @@ public:
 			}
 
 			std::ostringstream ss;
-			ss << "index: could not read index metadata from '" << sk.str() << "'and not allowed to create new index";
+			ss << "index: could not read index metadata from '" << sk.str() << "' and not allowed to create new index";
 			throw std::runtime_error(ss.str());
 		}
 
