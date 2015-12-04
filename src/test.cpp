@@ -1,8 +1,7 @@
 #include <algorithm>
 #include <iostream>
 
-#include "greylock/bucket_transport.hpp"
-#include "greylock/elliptics.hpp"
+#include "greylock/bucket_processor.hpp"
 #include "greylock/intersection.hpp"
 
 #include <boost/program_options.hpp>
@@ -27,8 +26,7 @@ public:
 		test::run(this, func(&test::test_remove_some_keys, t, 10000));
 
 		std::vector<greylock::key> keys;
-		if (t.get_groups().size() > 1)
-			test::run(this, func(&test::test_index_recovery, t, 10000));
+		test::run(this, func(&test::test_index_recovery, t, 10000));
 		test::run(this, func(&test::test_insert_many_keys, idx, keys, 10000));
 		test::run(this, func(&test::test_page_iterator, idx));
 		test::run(this, func(&test::test_iterator_number, idx, keys));
@@ -91,11 +89,11 @@ private:
 			k.url.key = std::string(buf);
 			k.url.bucket = m_bucket;
 
-			int err = idx.insert(k);
-			if (err < 0) {
-				printf("remote-test: failed to insert key: %s: %d\n", k.str().c_str(), err);
+			elliptics::error_info err = idx.insert(k);
+			if (err) {
+				printf("remote-test: insert key: %s, error: %s [%d]\n", k.str().c_str(), err.message().c_str(), err.code());
 				std::ostringstream ss;
-				ss << "failed to insert key: " << k.str() << ": " << err;
+				ss << "failed to insert key: " << k.str() << ": " << err.message();
 				throw std::runtime_error(ss.str());
 			}
 			keys.push_back(k);
@@ -105,11 +103,11 @@ private:
 		printf("remove-test: meta before remove: %s\n", idx.meta().str().c_str());
 		int del_num = keys.size() / 2;
 		for (auto it = keys.begin(), end = keys.begin() + del_num; it != end; ++it) {
-			int err = idx.remove(*it);
-			if (err < 0) {
-				printf("remote-test: failed to remove key: %s: %d\n", it->str().c_str(), err);
+			elliptics::error_info err = idx.remove(*it);
+			if (err) {
+				printf("remote-test: remove key: %s, error: %s [%d]\n", it->str().c_str(), err.message().c_str(), err.code());
 				std::ostringstream ss;
-				ss << "failed to remove key: " << it->str() << ": " << err;
+				ss << "failed to remove key: " << it->str() << ": " << err.message();
 				throw std::runtime_error(ss.str());
 			}
 		}
@@ -153,13 +151,13 @@ private:
 	}
 
 	void test_index_recovery(T &t, int max) {
-		std::vector<int> groups = t.get_groups();
-
+#if 0
 		greylock::eurl name;
 		name.key = "recovery-test." + elliptics::lexical_cast(rand());
 		name.bucket = m_bucket;
 
 		greylock::read_write_index<T> idx(t, name);
+		std::vector<int> groups = idx.get_groups();
 
 		std::vector<greylock::key> keys;
 
@@ -169,31 +167,31 @@ private:
 			k.url.key = "recovery-value." + elliptics::lexical_cast(i);
 			k.url.bucket = m_bucket;
 
-			int err = idx.insert(k);
+			elliptics::error_info err = idx.insert(k);
 			if (!err) {
 				keys.push_back(k);
 			}
 
 			if (i == max / 2) {
-				groups = t.get_groups();
+				groups = idx.get_groups();
 				std::vector<int> tmp;
 				tmp.insert(tmp.end(), groups.begin(), groups.begin() + groups.size() / 2);
-				t.set_groups(tmp);
+				idx.set_groups(tmp);
 			}
 		}
 
-		t.set_groups(groups);
+		idx.set_groups(groups);
 		ribosome::timer tm;
 		// index constructor self-heals itself
 		greylock::read_write_index<T> rec(t, name);
 
-		groups = t.get_groups();
+		groups = rec.get_groups();
 		std::vector<int> tmp;
 		tmp.insert(tmp.end(), groups.begin() + groups.size() / 2, groups.end());
-		t.set_groups(tmp);
+		rec.set_groups(tmp);
 
 		printf("recovery: index has been self-healed, records: %d, time: %ld ms, meta: %s, reading from groups: %s\n",
-				max, tm.elapsed(), rec.meta().str().c_str(), rec.print_groups(t.get_groups()).c_str());
+				max, tm.elapsed(), rec.meta().str().c_str(), rec.print_groups(rec.get_groups()).c_str());
 
 
 		for (auto it = keys.begin(); it != keys.end(); ++it) {
@@ -222,7 +220,8 @@ private:
 			dprintf("search: key: %s, url/value: %s\n", found.id.c_str(), found.url.str().c_str());
 		}
 
-		t.set_groups(groups);
+		rec.set_groups(groups);
+#endif
 	}
 
 	void test_select_many_keys(greylock::read_write_index<T> &idx, std::vector<greylock::key> &keys) {
@@ -487,21 +486,21 @@ int main(int argc, char *argv[])
 
 	dprintf("index: init: t: %zd\n", tm);
 
-	greylock::elliptics_transport t(log_file, log_level);
-	t.add_remotes(remotes);
+	elliptics::file_logger log(log_file.c_str(), elliptics::file_logger::parse_level(log_level));
+	std::shared_ptr<elliptics::node> node(new elliptics::node(elliptics::logger(log, blackhole::log::attributes_t())));
 
-	if (bnames.size() != 0) {
-		greylock::bucket_transport bt(t.get_node());
-		if (!bt.init(elliptics::parse_groups(groups.c_str()), bnames)) {
-			std::cerr << "Could not initialize bucket transport, exiting";
-			return -1;
-		}
+	std::vector<elliptics::address> rem(remotes.begin(), remotes.end());
+	node->add_remote(rem);
 
-		bt.test();
+	greylock::bucket_processor bt(node);
 
-		test<greylock::bucket_transport> tt(bt, bnames[0]);
-	} else {
-		t.set_groups(elliptics::parse_groups(groups.c_str()));
-		test<greylock::elliptics_transport> tt(t, "");
+	if (!bt.init(elliptics::parse_groups(groups.c_str()), bnames)) {
+		std::cerr << "Could not initialize bucket transport, exiting";
+		return -1;
 	}
+
+	bt.test();
+
+	test<greylock::bucket_processor> tt(bt, bnames[0]);
+	return 0;
 }

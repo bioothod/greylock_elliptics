@@ -1,7 +1,6 @@
 #include <iostream>
 
-#include "greylock/bucket_transport.hpp"
-#include "greylock/elliptics.hpp"
+#include "greylock/bucket_processor.hpp"
 #include "greylock/intersection.hpp"
 
 #include <boost/program_options.hpp>
@@ -60,10 +59,13 @@ int main(int argc, char *argv[])
 	}
 
 	try {
-		greylock::elliptics_transport t(log_file, log_level);
-		t.add_remotes(remotes);
+		elliptics::file_logger log(log_file.c_str(), elliptics::file_logger::parse_level(log_level));
+		std::shared_ptr<elliptics::node> node(new elliptics::node(elliptics::logger(log, blackhole::log::attributes_t())));
 
-		greylock::bucket_transport bt(t.get_node());
+		std::vector<elliptics::address> rem(remotes.begin(), remotes.end());
+		node->add_remote(rem);
+
+		greylock::bucket_processor bt(node);
 		if (!bt.init(elliptics::parse_groups(metagroups.c_str()), bnames)) {
 			std::cerr << "Could not initialize bucket transport, exiting";
 			return -1;
@@ -73,7 +75,7 @@ int main(int argc, char *argv[])
 		start.key = iname;
 		start.bucket = bnames[0];
 
-		greylock::read_only_index<greylock::bucket_transport> idx(bt, start);
+		greylock::read_only_index<greylock::bucket_processor> idx(bt, start);
 		std::cout << idx.meta().str() << std::endl;
 	} catch (const std::exception &e) {
 		std::cerr << "Exception: " << e.what() << std::endl;

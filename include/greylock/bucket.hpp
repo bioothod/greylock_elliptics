@@ -3,18 +3,15 @@
 
 #include "greylock/core.hpp"
 #include "greylock/elliptics_stat.hpp"
-#include "greylock/error.hpp"
 
 #include <elliptics/session.hpp>
 
 #include <msgpack.hpp>
 
 #include <condition_variable>
-#include <chrono>
 #include <functional>
 #include <mutex>
 #include <string>
-#include <thread>
 
 namespace ioremap { namespace greylock {
 
@@ -118,7 +115,6 @@ public:
 	void reload() {
 		elliptics::session s(*m_node);
 		s.set_exceptions_policy(elliptics::session::no_exceptions);
-		s.set_filter(elliptics::filters::all);
 		s.set_groups(m_meta_groups);
 
 		std::string ns = "bucket";
@@ -153,47 +149,59 @@ public:
 		return m_stat.str();
 	}
 
-	status read(const std::string &key) {
+	elliptics::async_read_result read(const std::vector<int> &groups, const std::string &key) {
+		elliptics::session s = session(true);
 		if (!m_valid) {
-			return invalid_status();
+			elliptics::async_read_result result(s);
+			elliptics::async_result_handler<elliptics::read_result_entry> handler(result);
+			handler.complete(elliptics::create_error(-EIO, "bucket: %s: valid: %d, reloaded: %d",
+						m_meta.name.c_str(), m_valid, m_reloaded));
+			return result;
 		}
 
-		elliptics::session s = session(true);
-		return s.read_data(key, 0, 0).get_one();
+		s.set_groups(groups);
+		return s.read_data(key, 0, 0);
+	}
+	
+	elliptics::async_read_result read(const std::string &key) {
+		return read(m_meta.groups, key);
 	}
 
-	std::vector<status> read_all(const std::string &key) {
-		if (!m_valid) {
-			return std::vector<status>();
-		}
+	std::vector<elliptics::async_read_result> read_all(const std::string &key) {
 		std::vector<elliptics::async_read_result> results;
-
 		elliptics::session s = session(true);
-		for (auto it = m_meta.groups.begin(), end = m_meta.groups.end(); it != end; ++it) {
-			std::vector<int> tmp;
-			tmp.push_back(*it);
 
-			s.set_groups(tmp);
+		if (!m_valid) {
+			elliptics::async_read_result result(s);
+			elliptics::async_result_handler<elliptics::read_result_entry> handler(result);
+			handler.complete(elliptics::create_error(-EIO, "bucket: %s: valid: %d, reloaded: %d",
+						m_meta.name.c_str(), m_valid, m_reloaded));
+			results.emplace_back(std::move(result));
+			return results;
+		}
+
+		for (auto it = m_meta.groups.begin(), end = m_meta.groups.end(); it != end; ++it) {
+			s.set_groups(std::vector<int>({*it}));
 
 			results.emplace_back(s.read_data(key, 0, 0));
 		}
 
-		std::vector<status> ret;
-		for (auto it = results.begin(), end = results.end(); it != end; ++it) {
-			ret.push_back(status(it->get_one()));
-		}
-
-		return ret;
+		return results;
 	}
 
-	std::vector<status> write(const std::vector<int> groups, const std::string &key,
+	elliptics::async_write_result write(const std::vector<int> groups, const std::string &key,
 			const std::string &data, size_t reserve_size, bool cache = false) {
-		if (!m_valid) {
-			return std::vector<status>();
-		}
-		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
-
 		elliptics::session s = session(cache);
+
+		if (!m_valid) {
+			elliptics::async_write_result result(s);
+			elliptics::async_result_handler<elliptics::write_result_entry> handler(result);
+			handler.complete(elliptics::create_error(-EIO, "bucket: %s: valid: %d, reloaded: %d",
+						m_meta.name.c_str(), m_valid, m_reloaded));
+			return result;
+		}
+
+		elliptics::data_pointer dp = elliptics::data_pointer::from_raw((char *)data.data(), data.size());
 
 		s.set_filter(elliptics::filters::all);
 		s.set_groups(groups);
@@ -227,31 +235,24 @@ public:
 				dnet_dump_id(&id.id()),
 				m_meta.name.c_str(), key.c_str(), data.size(), reserve_size, cache);
 
-		std::vector<status> ret;
-		elliptics::sync_write_result res = s.write_data(ctl).get();
-		for (auto it = res.begin(), end = res.end(); it != end; ++it) {
-			ret.emplace_back(status(*it));
-		}
-
-		return ret;
+		return s.write_data(ctl);
 	}
 
-	std::vector<status> write(const std::string &key, const std::string &data, size_t reserve_size, bool cache = false) {
+	elliptics::async_write_result write(const std::string &key, const std::string &data, size_t reserve_size, bool cache = false) {
 		return write(m_meta.groups, key, data, reserve_size, cache);
 	}
 
-	std::vector<status> remove(const std::string &key) {
-		if (!m_valid) {
-			return std::vector<status>();
-		}
+	elliptics::async_remove_result remove(const std::string &key) {
 		elliptics::session s = session(false);
-		elliptics::sync_remove_result res = s.remove(key).get();
-		std::vector<status> ret;
-		for (auto it = res.begin(), end = res.end(); it != end; ++it) {
-			ret.emplace_back(status(*it));
+		if (!m_valid) {
+			elliptics::async_remove_result result(s);
+			elliptics::async_result_handler<elliptics::remove_result_entry> handler(result);
+			handler.complete(elliptics::create_error(-EIO, "bucket: %s: valid: %d, reloaded: %d",
+						m_meta.name.c_str(), m_valid, m_reloaded));
+			return result;
 		}
 
-		return ret;
+		return s.remove(key);
 	}
 
 	bucket_meta meta() {
@@ -320,18 +321,11 @@ private:
 
 	bucket_stat m_stat;
 
-	status invalid_status() {
-		status st;
-		st.error = -EIO;
-		st.message = "bucket: " + m_meta.name + " is not valid";
-
-		return st;
-	}
-
 	elliptics::session session(bool cache) {
 		elliptics::session s(*m_node);
 		s.set_namespace(m_meta.name);
 		s.set_groups(m_meta.groups);
+		s.set_filter(elliptics::filters::all_with_ack);
 		s.set_timeout(60);
 		s.set_exceptions_policy(elliptics::session::no_exceptions);
 		if (cache)
@@ -357,29 +351,36 @@ private:
 	void meta_unpack(const elliptics::sync_read_result &result) {
 		elliptics::logger &log = m_node->get_log();
 
-		try {
-			const elliptics::read_result_entry &entry = result[0];
-			auto file = entry.file();
+		for (auto ent = result.begin(), end = result.end(); ent != end; ++ent) {
+			if (ent->error()) {
+				BH_LOG(log, DNET_LOG_ERROR, "meta_unpack: bucket: %s, error result: %s [%d]",
+						m_meta.name.c_str(), ent->error().message(), ent->error().code());
+				continue;
+			}
 
-			msgpack::unpacked msg;
-			msgpack::unpack(&msg, file.data<char>(), file.size());
+			try {
+				auto file = ent->file();
 
-			bucket_meta tmp;
+				msgpack::unpacked msg;
+				msgpack::unpack(&msg, file.data<char>(), file.size());
 
-			msg.get().convert(&tmp);
+				bucket_meta tmp;
 
-			std::ostringstream ss;
-			std::copy(tmp.groups.begin(), tmp.groups.end(), std::ostream_iterator<int>(ss, ":"));
+				msg.get().convert(&tmp);
 
-			BH_LOG(log, DNET_LOG_INFO, "meta_unpack: bucket: %s, acls: %ld, flags: 0x%lx, groups: %s",
-					m_meta.name.c_str(), m_meta.acl.size(), m_meta.flags, ss.str().c_str());
+				std::ostringstream ss;
+				std::copy(tmp.groups.begin(), tmp.groups.end(), std::ostream_iterator<int>(ss, ":"));
 
-			std::unique_lock<std::mutex> guard(m_lock);
-			std::swap(m_meta, tmp);
-			m_valid = true;
-		} catch (const std::exception &e) {
-			BH_LOG(log, DNET_LOG_ERROR, "meta_unpack: bucket: %s, exception: %s",
-					m_meta.name.c_str(), e.what());
+				BH_LOG(log, DNET_LOG_INFO, "meta_unpack: bucket: %s, acls: %ld, flags: 0x%lx, groups: %s",
+						m_meta.name.c_str(), m_meta.acl.size(), m_meta.flags, ss.str().c_str());
+
+				std::unique_lock<std::mutex> guard(m_lock);
+				std::swap(m_meta, tmp);
+				m_valid = true;
+			} catch (const std::exception &e) {
+				BH_LOG(log, DNET_LOG_ERROR, "meta_unpack: bucket: %s, exception: %s",
+						m_meta.name.c_str(), e.what());
+			}
 		}
 	}
 };
@@ -388,375 +389,6 @@ typedef std::shared_ptr<raw_bucket> bucket;
 static inline bucket make_bucket(std::shared_ptr<elliptics::node> &node, const std::vector<int> mgroups, const std::string &name) {
 	return std::make_shared<raw_bucket>(node, mgroups, name);
 }
-
-// This class implements main distribution logic.
-// There are multiple @bucket objects in the processor,
-// each bucket corresponds to logical entity which handles replication
-// and optionally additional internal write load balancing.
-//
-// Basically saying, @bucket is an entity which holds your data and
-// checks whether it is good or not.
-//
-// Thus, after you data has been written into given bucket, you can only
-// read it from that bucket and update it only in that bucket. If you write
-// data with the same key into different bucket, that will be a completely different object,
-// objects with the same name in different buckets will not be related in any way.
-//
-// When you do not have (do not even know) about which bucket to use, there is a helper method @get_bucket()
-// It will select bucket which suits your needs better than others. Selection logic taks into consideration
-// space measurements and various performance metrics (implicit disk and network for instance).
-// Selection is probabilistic in nature, thus it is possible that you will not get the best match,
-// this probability obeys normal distribution law and decays quickly.
-//
-// It is only possible to read data from some bucket (where you had written it), not from the storage.
-// There is internal per-bucket load balancing for read requests - elliptics maintains internal states
-// for all connections and groups (replicas within bucket) and their weights, which correspond to how
-// quickly one can read object from given destination point. When reading data from bucket, it selects
-// the fastest desistnation point among its replicas and reads data from that point. If data is not available,
-// elliptics will automatically fetch (data recover) data from other copies.
-class bucket_processor {
-public:
-	bucket_processor(std::shared_ptr<elliptics::node> &node) :
-	m_node(node),
-	m_stat(node)
-	{
-	}
-
-	virtual ~bucket_processor() {
-		m_need_exit = true;
-		m_wait.notify_all();
-		if (m_buckets_update.joinable())
-			m_buckets_update.join();
-	}
-
-	bool init(const std::vector<int> &mgroups, const std::vector<std::string> &bnames) {
-		std::map<std::string, bucket> buckets = read_buckets(mgroups, bnames);
-
-		m_buckets_update =  std::thread(std::bind(&bucket_processor::buckets_update, this));
-
-		std::unique_lock<std::mutex> lock(m_lock);
-
-		m_buckets = buckets;
-		m_bnames = bnames;
-		m_meta_groups = mgroups;
-
-		if (buckets.empty())
-			return false;
-
-		return true;
-	}
-
-	const elliptics::logger &logger() const {
-		return m_node->get_log();
-	}
-
-	// run self test, raise exception if there are problems
-	//
-	// Tests:
-	// 1. select bucket for upload multiple times,
-	// 	check that distribution is biased towards buckets with more free space available
-	void test() {
-		elliptics::logger &log = m_node->get_log();
-		BH_LOG(log, DNET_LOG_INFO, "test: start: buckets: %d", m_buckets.size());
-
-		std::unique_lock<std::mutex> guard(m_lock);
-		if (m_buckets.size() == 0) {
-			throw std::runtime_error("there are no buckets at all");
-		}
-
-		limits l;
-
-		std::map<float, bucket> good_buckets;
-		std::map<float, bucket> really_good_buckets;
-
-		float sum = 0;
-		float really_good_sum = 0;
-		for (auto it = m_buckets.begin(), end = m_buckets.end(); it != end; ++it) {
-			if (it->second->valid()) {
-				float w = it->second->weight(1, l);
-
-				BH_LOG(log, DNET_LOG_NOTICE, "test: bucket: %s, weight: %f", it->second->name(), w);
-
-				// skip buckets with zero weights
-				// usually this means that there is no free space for this request
-				// or stats are broken (timed out)
-				if (w <= 0)
-					continue;
-
-				good_buckets[w] = it->second;
-				sum += w;
-
-				if (w > 0.5) {
-					really_good_buckets[w] = it->second;
-					really_good_sum += w;
-				}
-			}
-		}
-
-		guard.unlock();
-
-		// use really good buckets if we have them
-		if (really_good_sum > 0) {
-			sum = really_good_sum;
-			good_buckets.swap(really_good_buckets);
-		}
-
-		if (good_buckets.size() == 0) {
-			throw std::runtime_error("there are buckets, but they are not suitable for size " +
-					elliptics::lexical_cast(1));
-		}
-
-
-		// first test - call @get_bucket() many times, check that distribution
-		// of the buckets looks similar to the initial weights
-		int num = 10000;
-		std::map<std::string, int> bucket_counters;
-		for (int i = 0; i < num; ++i) {
-			status st = get_bucket(1);
-			if (st.error < 0) {
-				throw std::runtime_error("get_bucket() failed: " + st.message);
-			}
-
-			int cnt = bucket_counters[st.data.to_string()];
-			cnt++;
-			bucket_counters[st.data.to_string()] = cnt;
-		}
-
-		for (auto it = good_buckets.begin(), end = good_buckets.end(); it != end; ++it) {
-			float w = it->first;
-			bucket b = it->second;
-
-			int counter = bucket_counters[b->name()];
-			float ratio = (float)counter/(float)num;
-			float wratio = w / sum;
-
-			// @ratio is a number of this bucket selection related to total number of runs
-			// it should rougly correspond to the ratio of free space in given bucket, or weight
-
-
-			BH_LOG(log, DNET_LOG_INFO, "test: bucket: %s, weight: %f, weight ratio: %f, selection ratio: %f",
-					b->name(), w, wratio, ratio);
-
-			float eq = ratio / wratio;
-			if (eq > 1.2 || eq < 0.8) {
-				std::ostringstream ss;
-				ss << "bucket: " << b->name() <<
-					", weight: " << w <<
-					", weight ratio: " << wratio <<
-					", selection ratio: " << ratio <<
-					": parameters mismatch, weight and selection ratios should be close to each other";
-				throw std::runtime_error(ss.str());
-			}
-		}
-
-		BH_LOG(log, DNET_LOG_INFO, "test: weight comparison of %d buckets has been completed", m_buckets.size());
-	}
-
-	// returns bucket name in @data or negative error code in @error
-	status get_bucket(size_t size) {
-		elliptics::logger &log = m_node->get_log();
-		status st;
-
-		std::unique_lock<std::mutex> guard(m_lock);
-		if (m_buckets.size() == 0) {
-			st.error = -ENODEV;
-			st.message = "there are no buckets at all";
-
-			return st;
-		}
-
-		struct bw {
-			bucket		b;
-			float		w = 0;
-		};
-
-		std::vector<bw> good_buckets;
-		good_buckets.reserve(m_buckets.size());
-
-		for (auto it = m_buckets.begin(), end = m_buckets.end(); it != end; ++it) {
-			if (it->second->valid()) {
-				bw b;
-				b.b = it->second;
-				good_buckets.push_back(b);
-			}
-		}
-
-		guard.unlock();
-
-		if (good_buckets.size() == 0) {
-			st.error = -ENODEV;
-			st.message = "there are buckets, but they are not suitable for size " + elliptics::lexical_cast(size);
-
-			return st;
-		}
-
-		limits l;
-		float sum = 0;
-		for (auto it = good_buckets.rbegin(), end = good_buckets.rend(); it != end; ++it) {
-			// weight calculation is a rather heavy task, cache this value
-			it->w = it->b->weight(1, l);
-			sum += it->w;
-		}
-
-		struct {
-			// reverse sort - from higher to lower weights
-			bool operator()(const bw &b1, const bw &b2) {
-				return b1.w > b2.w;
-			}
-		} cmp;
-		std::sort(good_buckets.begin(), good_buckets.end(), cmp);
-
-		// randomly select value in a range [0, sum+1)
-		// then iterate over all good buckets starting from the one with the highest weight
-		//
-		// the higher the weight, the more likely this bucket will be selected
-		float rnd = (0 + (rand() % (int)(sum * 10 - 0 + 1))) / 10.0;
-
-		BH_LOG(log, DNET_LOG_NOTICE, "test: weight selection: good-buckets: %d, rnd: %f, sum: %f",
-				good_buckets.size(), rnd, sum);
-
-		for (auto it = good_buckets.rbegin(), end = good_buckets.rend(); it != end; ++it) {
-			BH_LOG(log, DNET_LOG_NOTICE, "test: weight comparison: bucket: %s, sum: %f, rnd: %f, weight: %f",
-					it->b->name().c_str(), sum, rnd, it->w);
-			rnd -= it->w;
-			if (rnd <= 0) {
-				st.data = elliptics::data_pointer::copy(it->b->name());
-				break;
-			}
-		}
-
-		return st;
-	}
-
-	status read(const std::string &bname, const std::string &key) {
-		bucket b = find_bucket(bname);
-		if (!b) {
-			status st;
-			st.error = -ENODEV;
-			st.message = "bucket: " + bname + " : there is no such bucket";
-			return st;
-		}
-
-		return b->read(key);
-	}
-
-	std::vector<status> read_all(const std::string &bname, const std::string &key) {
-		bucket b = find_bucket(bname);
-		if (!b) {
-			return std::vector<status>();
-		}
-
-		return b->read_all(key);
-	}
-
-	std::vector<status> write(const std::vector<int> groups, const std::string &bname, const std::string &key,
-			const std::string &data, size_t reserve_size, bool cache = false) {
-		bucket b = find_bucket(bname);
-		if (!b) {
-			return std::vector<status>();
-		}
-
-		return b->write(groups, key, data, reserve_size, cache);
-	}
-
-	std::vector<status> write(const std::string &bname, const std::string &key,
-			const std::string &data, size_t reserve_size, bool cache = false) {
-		bucket b = find_bucket(bname);
-		if (!b) {
-			return std::vector<status>();
-		}
-
-		return b->write(key, data, reserve_size, cache);
-	}
-
-	std::vector<status> remove(const std::string &bname, const std::string &key) {
-		bucket b = find_bucket(bname);
-		if (!b) {
-			return std::vector<status>();
-		}
-
-		return b->remove(key);
-	}
-
-	std::string generate(const std::string &ns, const std::string &key) const {
-		elliptics::session s(*m_node);
-		s.set_namespace(ns.data(), ns.size());
-		elliptics::key k(key);
-		s.transform(k);
-
-		DNET_DUMP_ID_LEN(name, &k.id(), DNET_ID_SIZE);
-		return std::string(name);
-	}
-
-private:
-	std::shared_ptr<elliptics::node> m_node;
-
-	std::mutex m_lock;
-	std::vector<int> m_meta_groups;
-
-	std::vector<std::string> m_bnames;
-	std::map<std::string, bucket> m_buckets;
-
-	bool m_need_exit = false;
-	std::condition_variable m_wait;
-	std::thread m_buckets_update;
-
-	elliptics_stat m_stat;
-
-	bucket find_bucket(const std::string &bname) {
-		std::lock_guard<std::mutex> lock(m_lock);
-		auto it = m_buckets.find(bname);
-		if (it == m_buckets.end()) {
-			return bucket();
-		}
-
-		return it->second;
-	}
-
-	std::map<std::string, bucket> read_buckets(const std::vector<int> mgroups, const std::vector<std::string> &bnames) {
-		std::map<std::string, bucket> buckets;
-
-		for (auto it = bnames.begin(), end = bnames.end(); it != end; ++it) {
-			buckets[*it] = make_bucket(m_node, mgroups, *it);
-		}
-		m_stat.schedule_update_and_wait();
-
-		limits l;
-		elliptics::logger &log = m_node->get_log();
-		for (auto it = buckets.begin(), end = buckets.end(); it != end; ++it) {
-			it->second->wait_for_reload();
-
-			bucket_meta meta = it->second->meta();
-			for (auto g = meta.groups.begin(), gend = meta.groups.end(); g != gend; ++g) {
-				backend_stat bs = m_stat.stat(*g);
-				if (bs.group == *g) {
-					it->second->set_backend_stat(*g, bs);
-				}
-			}
-
-			BH_LOG(log, DNET_LOG_INFO, "read_buckets: bucket: %s: reloaded, valid: %d, "
-					"stats: %s, weight: %f",
-					it->first.c_str(), it->second->valid(),
-					it->second->stat_str().c_str(), it->second->weight(1, l));
-		}
-
-		return buckets;
-	}
-
-	void buckets_update() {
-		while (!m_need_exit) {
-			std::unique_lock<std::mutex> guard(m_lock);
-			if (m_wait.wait_for(guard, std::chrono::seconds(30), [&] {return m_need_exit;}))
-				break;
-			guard.unlock();
-
-			std::map<std::string, bucket> buckets = read_buckets(m_meta_groups, m_bnames);
-
-			guard.lock();
-			m_buckets = buckets;
-		}
-	}
-};
 
 }} // namespace ioremap::greylock
 

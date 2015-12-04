@@ -1,7 +1,6 @@
 #ifndef __INDEXES_STAT_HPP
 #define __INDEXES_STAT_HPP
 
-#include "greylock/error.hpp"
 #include "greylock/json.hpp"
 
 #include <elliptics/session.hpp>

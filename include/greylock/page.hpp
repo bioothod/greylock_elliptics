@@ -1,7 +1,6 @@
 #ifndef __INDEXES_PAGE_HPP
 #define __INDEXES_PAGE_HPP
 
-#include "greylock/error.hpp"
 #include "greylock/key.hpp"
 
 #include <iterator>
@@ -234,11 +233,28 @@ public:
 
 	page_iterator(T &t, const page &p) : m_t(t), m_page(p) {}
 	page_iterator(T &t, const eurl &url) : m_t(t), m_url(url) {
-		status e = m_t.read(url);
-		if (e.error)
+		elliptics::async_read_result async = m_t.read(url);
+		if (async.error())
 			return;
 
-		m_page.load(e.data.data(), e.data.size());
+		elliptics::read_result_entry e = async.get_one();
+		if (e.error())
+			return;
+
+		auto file = e.file();
+		m_page.load(file.data(), file.size());
+	}
+	page_iterator(T &t, const std::vector<int> &groups, const eurl &url) : m_t(t), m_url(url) {
+		elliptics::async_read_result async = m_t.read(groups, url);
+		if (async.error())
+			return;
+
+		elliptics::read_result_entry e = async.get_one();
+		if (e.error())
+			return;
+
+		auto file = e.file();
+		m_page.load(file.data(), file.size());
 	}
 	page_iterator(const page_iterator &i) : m_t(i.m_t) {
 		m_page = i.m_page;
@@ -271,7 +287,7 @@ public:
 		return m_page != rhs.m_page;
 	}
 
-	eurl url() const {
+	const eurl &url() const {
 		return m_url;
 	}
 
@@ -289,12 +305,18 @@ private:
 			m_url = eurl();
 		} else {
 			m_url = m_page.next;
-			status e = m_t.read(m_url);
-			if (e.error) {
-				m_page = page();
+			m_page = page();
+
+			elliptics::async_read_result async = m_t.read(m_url);
+			if (async.error())
 				return;
-			}
-			m_page.load(e.data.data(), e.data.size());
+
+			elliptics::read_result_entry e = async.get_one();
+			if (e.error())
+				return;
+
+			auto file = e.file();
+			m_page.load(file.data(), file.size());
 		}
 	}
 };
@@ -357,12 +379,18 @@ private:
 			if (m_page.next.empty()) {
 				m_page = page();
 			} else {
-				status e = m_t.read(m_page.next);
-				if (e.error) {
-					m_page = page();
+				m_page = page();
+
+				elliptics::async_read_result async = m_t.read(m_page.next);
+				if (async.error())
 					return;
-				}
-				m_page.load(e.data.data(), e.data.size());
+
+				elliptics::read_result_entry e = async.get_one();
+				if (e.error())
+					return;
+
+				auto file = e.file();
+				m_page.load(file.data(), file.size());
 			}
 		}
 	}

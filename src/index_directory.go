@@ -174,6 +174,8 @@ func send_index_request(path string) error {
 	}
 	defer resp.Body.Close()
 
+	_, _ = ioutil.ReadAll(resp.Body)
+
 	count++
 
 	check_search(ireq.Mailbox, "dnet_usage main")

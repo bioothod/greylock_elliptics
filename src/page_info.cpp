@@ -1,7 +1,7 @@
 #include <fstream>
 #include <iostream>
 
-#include "greylock/bucket_transport.hpp"
+#include "greylock/bucket_processor.hpp"
 #include "greylock/intersection.hpp"
 
 #include <boost/program_options.hpp>
@@ -29,11 +29,11 @@ int main(int argc, char *argv[])
 		("metagroups", bpo::value<std::string>(&metagroups), "metadata groups where bucket info is stored: 1:2:3")
 		;
 
-	std::string key_name, key_file;
+	std::string key_name, key_file, bname;
 	bpo::options_description gr("Page options");
 	gr.add_options()
-		("key", bpo::value<std::string>(&key_name),
-			"page key as hex string (128 bytes long): 00aabbccdd1122...")
+		("bucket", bpo::value<std::string>(&bname), "bucket, where given page lives")
+		("key", bpo::value<std::string>(&key_name), "page key string")
 		("key-file", bpo::value<std::string>(&key_file), "file where page data lives")
 		;
 
@@ -74,23 +74,31 @@ int main(int argc, char *argv[])
 				std::cerr << "You must provide remote key\n" << cmdline_options << std::endl;
 				return -1;
 			}
-#if 0
-			greylock::elliptics_transport t(log_file, log_level);
-			t.add_remotes(remotes);
 
-			greylock::bucket_transport bt(t.get_node());
-			if (!bt.init(elliptics::parse_groups(metagroups.c_str()), bnames)) {
+			elliptics::file_logger log(log_file.c_str(), elliptics::file_logger::parse_level(log_level));
+			std::shared_ptr<elliptics::node> node(new elliptics::node(elliptics::logger(log, blackhole::log::attributes_t())));
+
+			std::vector<elliptics::address> rem(remotes.begin(), remotes.end());
+			node->add_remote(rem);
+
+			greylock::bucket_processor bt(node);
+			if (!bt.init(elliptics::parse_groups(metagroups.c_str()), std::vector<std::string>({bname}))) {
 				std::cerr << "Could not initialize bucket transport, exiting";
 				return -1;
 			}
 
-			greylock::eurl start;
-			start.key = iname;
-			start.bucket = bnames[0];
+			greylock::eurl url;
+			url.key = key_name;
+			url.bucket = bname;
 
-			greylock::read_only_index<greylock::bucket_transport> idx(bt, start);
-			std::cout << idx.meta().str() << std::endl;
-#endif
+			elliptics::async_read_result async = bt.read(url);
+			if (async.error()) {
+				std::cerr << "could not read page '" << url.str() << "': " << async.error().message() << std::endl;
+				return async.error().code();
+			}
+
+			elliptics::read_result_entry ent = async.get_one();
+			p.load(ent.file().data(), ent.file().size());
 		} else {
 			std::ifstream in(key_file.c_str());
 			std::ostringstream ss;

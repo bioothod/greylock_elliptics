@@ -94,7 +94,7 @@ public:
 	index(T &t, const eurl &sk, bool read_only): m_t(t), m_log(t.logger()), m_sk(sk), m_read_only(read_only) {
 		generate_meta_key();
 
-		std::vector<status> meta = m_t.read_all(meta_key());
+		std::vector<elliptics::async_read_result> meta = m_t.read_all(meta_key());
 
 		struct separate_index_meta {
 			int group = 0;
@@ -104,21 +104,22 @@ public:
 		std::vector<separate_index_meta> mg;
 
 		for (auto it = meta.begin(), end = meta.end(); it != end; ++it) {
-			if (it->error) {
-				continue;
+			for (auto ent = it->begin(), ent_end = it->end(); ent != ent_end; ++ent) {
+				if (!ent->error()) {
+					separate_index_meta tmp;
+
+					msgpack::unpacked result;
+					msgpack::unpack(&result, (const char *)ent->file().data(), ent->file().size());
+					msgpack::object obj = result.get();
+
+					tmp.meta = obj.as<index_meta>();
+					tmp.group = ent->command()->id.group_id;
+
+					mg.emplace_back(tmp);
+
+					break;
+				}
 			}
-
-			separate_index_meta tmp;
-
-			msgpack::unpacked result;
-			msgpack::unpack(&result, (const char *)it->data.data(), it->data.size());
-			msgpack::object obj = result.get();
-
-			tmp.meta = obj.as<index_meta>();
-
-			tmp.group = it->group;
-
-			mg.emplace_back(tmp);
 		}
 
 		if (mg.empty()) {
@@ -148,18 +149,13 @@ public:
 			}
 		}
 
-		std::vector<int> recovery_groups;
 		std::vector<int> good_groups;
 		for (auto it = mg.begin(), end = mg.end(); it != end; ++it) {
 			if ((it->meta.generation_number_sec == highest_generation_number_sec) &&
 					(it->meta.generation_number_nsec == highest_generation_number_nsec)) {
 				good_groups.push_back(it->group);
-			} else {
-				recovery_groups.push_back(it->group);
 			}
 		}
-
-		m_t.set_groups(good_groups);
 
 		if ((highest_generation_number_sec == 0) && (highest_generation_number_nsec == 0)) {
 			if (!m_read_only) {
@@ -173,7 +169,7 @@ public:
 			throw std::runtime_error(ss.str());
 		}
 
-		if (recovery_groups.empty())
+		if (good_groups.size() == meta.size())
 			return;
 
 		// do not try to recover read-only index
@@ -181,29 +177,26 @@ public:
 			return;
 
 		size_t pages_recovered = 0;
-		for (auto it = page_begin(), end = page_end(); it != end; ++it) {
-			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: page: %s: %s -> %s",
-				it.url().str().c_str(), it->str().c_str(), print_groups(recovery_groups).c_str());
+		for (auto it = page_begin(good_groups), end = page_end(); it != end; ++it) {
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: recovering page: url: %s, content: %s",
+				it.url().str().c_str(), it->str().c_str());
 
-			std::vector<status> wr = m_t.write(recovery_groups, it.url(), it->save(), default_reserve_size, false);
-			
-			recovery_groups.clear();
+			int recovered = 0;
+
+			elliptics::async_write_result wr = m_t.write(it.url(), it->save(), default_reserve_size, false);
 			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
-				if (!r->error) {
-					recovery_groups.push_back(r->group);
+				if (!r->error()) {
+					recovered++;
 				}
 			}
 
-			if (recovery_groups.size() == 0)
+			if (!recovered)
 				break;
 
 			pages_recovered++;
 		}
 
-		good_groups.insert(good_groups.end(), recovery_groups.begin(), recovery_groups.end());
-		m_t.set_groups(good_groups);
-
-		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: opened: page_index: %ld, groups: %s, pages recovered: %zd",
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: opened: page_index: %ld, good_groups: %s, pages recovered: %zd",
 				m_meta.page_index, print_groups(good_groups).c_str(), pages_recovered);
 	}
 
@@ -230,38 +223,38 @@ public:
 		return found.first.objects[found.second];
 	}
 
-	int insert(const key &obj) const {
-		return -EPERM;
+	elliptics::error_info insert(const key &obj) const {
+		return elliptics::create_error(-EPERM, "can not insert object '%s' into constant index", obj.str().c_str());
 	}
 
-	int insert(const key &obj) {
+	elliptics::error_info insert(const key &obj) {
 		if (m_read_only)
-			return -EPERM;
+			return elliptics::create_error(-EPERM, "can not insert object '%s' into read-only index", obj.str().c_str());
 
 		recursion tmp;
-		int ret = insert(m_sk, obj, tmp);
-		if (ret < 0)
-			return ret;
+		elliptics::error_info err = insert(m_sk, obj, tmp);
+		if (err)
+			return err;
 
 		m_meta.update_generation_number();
-		return 0;
+		return err;
 	}
 
-	int remove(const key &obj) const {
-		return -EPERM;
+	elliptics::error_info remove(const key &obj) const {
+		return elliptics::create_error(-EPERM, "can not remove object '%s' from constant index", obj.str().c_str());
 	}
 
-	int remove(const key &obj) {
+	elliptics::error_info remove(const key &obj) {
 		if (m_read_only)
-			return -EPERM;
+			return elliptics::create_error(-EPERM, "can not remove object '%s' from read-only index", obj.str().c_str());
 
 		remove_recursion tmp;
-		int ret = remove(m_sk, obj, tmp);
-		if (ret < 0)
-			return ret;
+		elliptics::error_info err = remove(m_sk, obj, tmp);
+		if (err)
+			return err;
 
 		m_meta.update_generation_number();
-		return 0;
+		return err;
 	}
 
 	iterator<T> begin(const std::string &k) const {
@@ -304,6 +297,10 @@ public:
 
 	page_iterator<T> page_begin() const {
 		return page_iterator<T>(m_t, m_sk);
+	}
+
+	page_iterator<T> page_begin(const std::vector<int> &groups) const {
+		return page_iterator<T>(m_t, groups, m_sk);
 	}
 
 	page_iterator<T> page_end() const {
@@ -353,7 +350,7 @@ private:
 		msgpack::pack(ss, m_meta);
 
 		std::string ms = ss.str();
-		m_t.write(meta_key(), ms, true);
+		m_t.write(meta_key(), ms, 0, true);
 
 		BH_LOG(m_log, INDEXES_LOG_INFO, "index: meta updated: key: %s, meta: %s, size: %d",
 				meta_key().str(), m_meta.str().c_str(), ms.size());
@@ -362,18 +359,27 @@ private:
 	void start_page_init() {
 		page start_page;
 
-		m_t.write(m_sk, start_page.save());
+		m_t.write(m_sk, start_page.save(), 0, true);
 		m_meta.num_pages++;
 	}
 
 	std::pair<page, int> search(const eurl &page_key, const key &obj) const {
-		status e = m_t.read(page_key);
-		if (e.error) {
-			return std::make_pair(page(), e.error);
+		elliptics::async_read_result async = m_t.read(page_key);
+		if (async.error()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, async error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
+			return std::make_pair(page(), async.error().code());
+		}
+
+		elliptics::read_result_entry ent = async.get_one();
+		if (ent.error()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, entry error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
+			return std::make_pair(page(), ent.error().code());
 		}
 
 		page p;
-		p.load(e.data.data(), e.data.size());
+		p.load(ent.file().data(), ent.file().size());
 
 		int found_pos = p.search_node(obj);
 		if (found_pos < 0) {
@@ -398,17 +404,27 @@ private:
 
 	// returns true if page at @page_key has been split after insertion
 	// key used to store split part has been saved into @obj.url
-	int insert(const eurl &page_key, const key &obj, recursion &rec) {
-		status e = m_t.read(page_key);
-		if (e.error) {
-			return e.error;
+	elliptics::error_info insert(const eurl &page_key, const key &obj, recursion &rec) {
+		elliptics::async_read_result async = m_t.read(page_key);
+		if (async.error()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, async error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
+			return async.error();
+		}
+
+		elliptics::read_result_entry ent = async.get_one();
+		if (ent.error()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, entry error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
+			return ent.error();
 		}
 
 		bool replaced = false;
 
-		int err;
+		elliptics::error_info err;
+
 		page p;
-		p.load(e.data.data(), e.data.size());
+		p.load(ent.file().data(), ent.file().size());
 
 		page split;
 
@@ -430,13 +446,15 @@ private:
 				// this path can only be taken once - when new empty index is being created
 				key leaf_key;
 				leaf_key = obj;
-				leaf_key.url = generate_page_url();
+				err = generate_page_url(leaf_key.url);
+				if (err)
+					return err;
 
 				page leaf(true), unused_split;
 				leaf.insert_and_split(obj, unused_split, replaced);
 				if (!replaced)
 					m_meta.num_keys++;
-				err = check(m_t.write(leaf_key.url, leaf.save()));
+				err = check(m_t.write(leaf_key.url, leaf.save(), default_reserve_size, true));
 				if (err)
 					return err;
 
@@ -445,7 +463,7 @@ private:
 				// do not increment @num_keys since it is not a leaf page
 				p.insert_and_split(leaf_key, unused_split, replaced);
 				p.next = leaf_key.url;
-				err = check(m_t.write(page_key, p.save()));
+				err = check(m_t.write(page_key, p.save(), default_reserve_size, true));
 				if (err)
 					return err;
 
@@ -456,7 +474,7 @@ private:
 
 				m_meta.num_pages++;
 				m_meta.num_leaf_pages++;
-				return 0;
+				return elliptics::error_info();
 			}
 
 			key &found = p.objects[found_pos];
@@ -502,7 +520,7 @@ private:
 			if (want_return) {
 				rec.page_start = p.objects.front();
 				rec.split_key = key();
-				return 0;
+				return elliptics::error_info();
 			}
 		} else {
 			// this is a leaf page, increment @num_keys if it was not a key replacement
@@ -517,7 +535,9 @@ private:
 		if (!split.is_empty()) {
 			// generate key for split page
 			rec.split_key = split.objects.front();
-			rec.split_key.url = generate_page_url();
+			err = generate_page_url(rec.split_key.url);
+			if (err)
+				return err;
 
 			split.next = p.next;
 			p.next = rec.split_key.url;
@@ -526,7 +546,7 @@ private:
 					obj.str().c_str(),
 					page_key.str().c_str(), p.str().c_str(),
 					rec.split_key.str().c_str(), split.str().c_str());
-			err = check(m_t.write(rec.split_key.url, split.save()));
+			err = check(m_t.write(rec.split_key.url, split.save(), default_reserve_size, true));
 			if (err)
 				return err;
 
@@ -543,9 +563,11 @@ private:
 
 			key old_root_key;
 			old_root_key = p.objects.front();
-			old_root_key.url = generate_page_url();
+			err = generate_page_url(old_root_key.url);
+			if (err)
+				return err;
 
-			err = check(m_t.write(old_root_key.url, p.save()));
+			err = check(m_t.write(old_root_key.url, p.save(), default_reserve_size, true));
 			if (err)
 				return err;
 
@@ -559,7 +581,7 @@ private:
 
 			new_root.next = new_root.objects.front().url;
 
-			err = check(m_t.write(m_sk, new_root.save()));
+			err = check(m_t.write(m_sk, new_root.save(), default_reserve_size, true));
 			if (err)
 				return err;
 
@@ -574,7 +596,7 @@ private:
 		} else {
 			BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: %s: write main page: %s -> %s",
 				obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
-			err = check(m_t.write(page_key, p.save(), true));
+			err = check(m_t.write(page_key, p.save(), default_reserve_size, true));
 		}
 
 		return err;
@@ -582,15 +604,25 @@ private:
 
 	// returns true if page at @page_key has been split after insertion
 	// key used to store split part has been saved into @obj.url
-	int remove(const eurl &page_key, const key &obj, remove_recursion &rec) {
-		status e = m_t.read(page_key);
-		if (e.error) {
-			return e.error;
+	elliptics::error_info remove(const eurl &page_key, const key &obj, remove_recursion &rec) {
+		elliptics::async_read_result async = m_t.read(page_key);
+		if (async.error()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, async error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
+			return async.error();
 		}
 
-		int err;
+		elliptics::read_result_entry ent = async.get_one();
+		if (ent.error()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, entry error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
+			return ent.error();
+		}
+
+		elliptics::error_info err;
+
 		page p;
-		p.load(e.data.data(), e.data.size());
+		p.load(ent.file().data(), ent.file().size());
 
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: page: %s -> %s",
 				obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
@@ -602,7 +634,10 @@ private:
 				page_key.str().c_str(), p.str().c_str(),
 				found_pos);
 
-			return -ENOENT;
+			return elliptics::create_error(-ENOENT, "index: remove: %s: page: %s -> %s, found_pos: %d: could not find object",
+				obj.str().c_str(),
+				page_key.str().c_str(), p.str().c_str(),
+				found_pos);
 		}
 
 		// we must copy key, since if it is leaf page and it is the last key in the page,
@@ -621,12 +656,12 @@ private:
 			m_meta.num_keys--;
 		} else {
 			err = remove(found.url, obj, rec);
-			if (err < 0)
+			if (err)
 				return err;
 
 			// we have removed key from the underlying page, and the first key of that page hasn't been changed
 			if (!rec.page_start)
-				return 0;
+				return elliptics::error_info();
 
 			// the first key of the underlying page has been changed, update appropriate key in the current page
 			found = p.objects[found_pos] = rec.page_start;
@@ -647,7 +682,7 @@ private:
 				rec.page_start = p.objects.front();
 			}
 
-			err = check(m_t.write(page_key, p.save()));
+			err = check(m_t.write(page_key, p.save(), default_reserve_size, 0));
 			if (err)
 				return err;
 		} else {
@@ -663,39 +698,63 @@ private:
 				m_meta.num_leaf_pages--;
 		}
 
-		return 0;
+		return elliptics::error_info();
 	}
 
-	eurl generate_page_url() {
-		status st = m_t.get_bucket(default_reserve_size);
-		if (st.error < 0) {
+	elliptics::error_info generate_page_url(eurl &url) {
+		elliptics::error_info err = m_t.get_bucket(default_reserve_size, url.bucket);
+		if (err) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: generate_page_url: could not get bucket, "
 				"generated page URL will not be valid: %s [%d]",
-					st.message, st.error);
+					err.message(), err.code());
+			return err;
 		}
 
-		eurl ret;
-		ret.bucket = st.data.to_string();
-
-		ret.key = m_meta_url.key + "." + elliptics::lexical_cast(m_meta.page_index.fetch_add(1));
-		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key: %s", ret.str().c_str());
-		return ret;
+		url.key = m_meta_url.key + "." + elliptics::lexical_cast(m_meta.page_index.fetch_add(1));
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key url: %s", url.str().c_str());
+		return elliptics::error_info();
 	}
 
-	int check(const std::vector<status> &wr) {
+	elliptics::error_info check(elliptics::async_remove_result &&wr) {
 		std::vector<int> groups;
+		std::ostringstream st;
+
+		st << "errors: [";
 		for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
-			if (!r->error) {
-				groups.push_back(r->group);
+			if (!r->error()) {
+				groups.push_back(r->command()->id.group_id);
+			} else {
+				st << "err: " << r->error().message() << ", code: " << r->error().code() << ";";
 			}
 		}
 
-		m_t.set_groups(groups);
+		if (groups.empty())
+			return elliptics::create_error(-ENOENT,
+					"remove checker: there are no writeable groups, last error: %s",
+					st.str().c_str());
+
+		return elliptics::error_info();
+	}
+
+	elliptics::error_info check(elliptics::async_write_result &&wr) {
+		std::vector<int> groups;
+		std::ostringstream st;
+
+		st << "errors: [";
+		for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
+			if (!r->error()) {
+				groups.push_back(r->command()->id.group_id);
+			} else {
+				st << "err: " << r->error().message() << ", code: " << r->error().code() << ";";
+			}
+		}
 
 		if (groups.empty())
-			return -EIO;
+			return elliptics::create_error(-ENOENT,
+					"write checker: there are no writeable groups, last error: %s",
+					st.str().c_str());
 
-		return 0;
+		return elliptics::error_info();
 	}
 };
 

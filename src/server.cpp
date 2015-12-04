@@ -1,5 +1,4 @@
-#include "greylock/bucket.hpp"
-#include "greylock/bucket_transport.hpp"
+#include "greylock/bucket_processor.hpp"
 #include "greylock/core.hpp"
 #include "greylock/index.hpp"
 #include "greylock/intersection.hpp"
@@ -204,6 +203,14 @@ struct single_attribute {
 
 struct indexes_request {
 	typedef std::vector<size_t> pos_t;
+
+	indexes_request(indexes_request&& o) :
+		inames(o.inames.str()),
+		indexes(std::move(o.indexes)),
+		positions(std::move(o.positions)),
+		attributes(std::move(o.attributes)) {}
+
+	indexes_request() {}
 
 	std::ostringstream inames;
 
@@ -579,7 +586,7 @@ public:
 		bool intersect(const thevoid::http_request &req, indexes_request &ireq, greylock::intersect::result &result) {
 			ribosome::timer tm;
 
-			greylock::intersect::intersector<greylock::bucket_transport> p(*(server()->bucket()));
+			greylock::intersect::intersector<greylock::bucket_processor> p(*(server()->bucket()));
 
 			std::vector<locker<http_server>> lockers;
 			lockers.reserve(ireq.indexes.size());
@@ -614,16 +621,23 @@ public:
 	};
 
 	struct on_index : public thevoid::simple_request_stream<http_server> {
-		void process_one_document(const thevoid::http_request &req, const std::string &mbox,
+		elliptics::error_info process_one_document(const thevoid::http_request &req, const std::string &mbox,
 				greylock::key &doc, const rapidjson::Value &idxs) {
 			ribosome::timer all_tm;
 			ribosome::timer tm;
 
 			ILOG_INFO("process_one_document: url: %s, mailbox: %s, doc: %s: start insertion",
-					req.url().to_human_readable().c_str(), mbox,
+					req.url().to_human_readable().c_str(), mbox.c_str(),
 					doc.str().c_str());
 
 			auto ireq = server()->get_indexes(mbox, idxs);
+
+			if (ireq.indexes.size() == 0) {
+				return elliptics::create_error(-EINVAL,
+						"process_one_document: url: %s, mailbox: %s, doc: %s: no valid indexes",
+						req.url().to_human_readable().c_str(), mbox.c_str(),
+						doc.str().c_str());
+			}
 
 			for (size_t i = 0; i < ireq.indexes.size(); ++i) {
 				greylock::eurl &iname = ireq.indexes[i];
@@ -638,28 +652,25 @@ public:
 				std::unique_lock<locker<http_server>> lk(l);
 
 				try {
-					greylock::read_write_index<greylock::bucket_transport> index(*(server()->bucket()), iname);
+					greylock::read_write_index<greylock::bucket_processor> index(*(server()->bucket()), iname);
 
-					int err = index.insert(doc);
-					if (err < 0) {
-						ILOG_ERROR("process_one_document: url: %s, mailbox: %s, "
-								"doc: %s, index: %s error: %d: could not insert new key",
-							req.url().to_human_readable().c_str(), mbox,
+					elliptics::error_info err = index.insert(doc);
+					if (err) {
+						return elliptics::create_error(err.code(), "process_one_document: url: %s, mailbox: %s, "
+								"doc: %s, index: %s: could not insert new key: %s [%d]",
+							req.url().to_human_readable().c_str(), mbox.c_str(),
 							doc.str().c_str(),
 							iname.str().c_str(),
-							err);
-						this->send_reply(swarm::http_response::internal_server_error);
-						return;
+							err.message().c_str(),
+							err.code());
 					}
 				} catch (const std::exception &e) {
-					ILOG_ERROR("process_one_document: url: %s, mailbox: %s, "
+					return elliptics::create_error(-EINVAL, "process_one_document: url: %s, mailbox: %s, "
 							"doc: %s, index: %s, exception: %s",
-						req.url().to_human_readable().c_str(), mbox,
-						doc.str().c_str(),
-						iname.str().c_str(),
-						e.what());
-					this->send_reply(swarm::http_response::internal_server_error);
-					return;
+							req.url().to_human_readable().c_str(), mbox.c_str(),
+							doc.str().c_str(),
+							iname.str().c_str(),
+							e.what());
 				}
 
 				ILOG_INFO("process_one_document: url: %s, mailbox: %s, "
@@ -673,9 +684,15 @@ public:
 			ILOG_INFO("process_one_document: url: %s, mailbox: %s, doc: %s, total number of indexes: %d, elapsed time: %d ms",
 					req.url().to_human_readable().c_str(), mbox,
 					doc.str().c_str(), ireq.indexes.size(), all_tm.elapsed());
+
+			return elliptics::error_info();
 		}
 
-		void parse_docs(const thevoid::http_request &req, const std::string &mbox, const rapidjson::Value &docs) {
+		elliptics::error_info parse_docs(const thevoid::http_request &req, const std::string &mbox, const rapidjson::Value &docs) {
+			elliptics::error_info err = elliptics::create_error(-EINVAL,
+					"url: %s, mbox: %s: could not parse document, there are no valid index entries",
+					req.url().to_human_readable().c_str(), mbox.c_str());
+
 			for (auto it = docs.Begin(), id_end = docs.End(); it != id_end; ++it) {
 				if (it->IsObject()) {
 					greylock::key doc;
@@ -715,9 +732,13 @@ public:
 						continue;
 					}
 
-					process_one_document(req, mbox, doc, idxs);
+					err = process_one_document(req, mbox, doc, idxs);
+					if (err)
+						return err;
 				}
 			}
+
+			return err;
 		}
 
 		virtual void on_request(const thevoid::http_request &req, const boost::asio::const_buffer &buffer) {
@@ -760,7 +781,13 @@ public:
 				return;
 			}
 
-			parse_docs(req, mbox, docs);
+			elliptics::error_info err = parse_docs(req, mbox, docs);
+			if (err) {
+				ILOG_ERROR("on_request: url: %s, mailbox: %s, keys: %d: insertion error: %s [%d]",
+					req.url().to_human_readable().c_str(), mbox, docs.Size(), err.message(), err.code());
+				this->send_reply(swarm::http_response::bad_request);
+				return;
+			}
 
 			ILOG_INFO("on_request: url: %s, mailbox: %s, keys: %d: insertion completed, index duration: %d ms",
 					req.url().to_human_readable().c_str(), mbox, docs.Size(), index_tm.elapsed());
@@ -768,7 +795,7 @@ public:
 		}
 	};
 
-	std::shared_ptr<greylock::bucket_transport> bucket() {
+	std::shared_ptr<greylock::bucket_processor> bucket() {
 		return m_bucket;
 	}
 
@@ -843,7 +870,7 @@ private:
 	std::shared_ptr<elliptics::node> m_node;
 
 	std::string m_meta_bucket;
-	std::shared_ptr<greylock::bucket_transport> m_bucket;
+	std::shared_ptr<greylock::bucket_processor> m_bucket;
 
 	long m_read_timeout = 60;
 	long m_write_timeout = 60;
@@ -862,7 +889,7 @@ private:
 			return false;
 		}
 
-		m_bucket.reset(new greylock::bucket_transport(m_node));
+		m_bucket.reset(new greylock::bucket_processor(m_node));
 
 		if (!prepare_session(config)) {
 			return false;
