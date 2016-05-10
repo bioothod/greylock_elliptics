@@ -275,7 +275,7 @@ public:
 		return b->read(groups, url.key);
 	}
 
-	std::vector<elliptics::async_read_result> read_all(const eurl &url) {
+	elliptics::async_read_result read_latest(const eurl &url) {
 		bucket b;
 
 		elliptics::error_info err = find_bucket(url.bucket, b);
@@ -284,12 +284,25 @@ public:
 			elliptics::async_result_handler<elliptics::read_result_entry> handler(result);
 			handler.complete(err);
 
-			std::vector<elliptics::async_read_result> res;
-			res.emplace_back(std::move(result));
-			return res;
+			return result;
 		}
 
-		return b->read_all(url.key);
+		return b->read_latest(url.key);
+	}
+
+	elliptics::async_lookup_result prepare_latest(const eurl &url) {
+		bucket b;
+
+		elliptics::error_info err = find_bucket(url.bucket, b);
+		if (err) {
+			elliptics::async_lookup_result result(m_error_session);
+			elliptics::async_result_handler<elliptics::lookup_result_entry> handler(result);
+			handler.complete(err);
+
+			return result;
+		}
+
+		return b->prepare_latest(url.key);
 	}
 
 	elliptics::async_write_result write(const std::vector<int> groups, const eurl &url,
@@ -339,7 +352,7 @@ public:
 		s.transform(k);
 
 		DNET_DUMP_ID_LEN(name, &k.id(), DNET_ID_SIZE);
-		return std::string(name);
+		return key + "." + std::string(name);
 	}
 
 private:
