@@ -66,6 +66,7 @@ type SearchResponse struct {
 
 var count int = 0
 var prev_search_count int = 0
+var search_query string = ""
 
 func check_search(mailbox, query string) {
 	sreq := SearchReq {
@@ -178,13 +179,24 @@ func send_index_request(path string) error {
 
 	count++
 
-	check_search(ireq.Mailbox, "dnet_usage main")
+	if search_query != "" {
+		check_search(ireq.Mailbox, "dnet_usage main")
 
-	fmt.Printf("count: %d, search responses: %d, status: %s %s\n",
-		count, prev_search_count, resp.Status, time.Since(start))
+		fmt.Printf("count: %d, search responses: %d, status: %s, duration: %s\n",
+			count, prev_search_count, resp.Status, time.Since(start))
+	} else {
+		fmt.Printf("count: %d, status: %s, duration: %s\n",
+			count, resp.Status, time.Since(start))
+	}
 
 	if resp.StatusCode != 200 {
 		fmt.Println("Bad response code: ", resp.StatusCode)
+
+		// this likely means invalid data to index
+		if resp.StatusCode == 400 {
+			return nil
+		}
+
 		os.Exit(-1)
 	}
 
@@ -226,11 +238,16 @@ func walcfunc (path string, info os.FileInfo, err error) error {
 }
 
 func main() {
-	dir := flag.String("dir", "./", "Directory to traverse and parse files")
-	list := flag.String("list", "", "File containing list of files to parse")
+	dir := flag.String("dir", "./", "Directory to traverse and parse files.")
+	list := flag.String("list", "", "File containing list of files to parse.")
+	search := flag.String("search", "", "Query to search after every index update, when not empty, " +
+		"number of documents returned by this query must increase or be the same, " +
+		"if this is not true, there is a bug in server, indexing process stops.")
 	flag.Parse()
 
 	count = 0
+	search_query = *search;
+
 
 	if *list != "" {
 		lcontent, err := ioutil.ReadFile(*list)
