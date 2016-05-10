@@ -167,8 +167,7 @@ public:
 		return read(m_meta.groups, key);
 	}
 
-	std::vector<elliptics::async_read_result> read_all(const std::string &key) {
-		std::vector<elliptics::async_read_result> results;
+	elliptics::async_read_result read_latest(const std::string &key) {
 		elliptics::session s = session(true);
 
 		if (!m_valid) {
@@ -176,17 +175,24 @@ public:
 			elliptics::async_result_handler<elliptics::read_result_entry> handler(result);
 			handler.complete(elliptics::create_error(-EIO, "bucket: %s: valid: %d, reloaded: %d",
 						m_meta.name.c_str(), m_valid, m_reloaded));
-			results.emplace_back(std::move(result));
-			return results;
+			return result;
 		}
 
-		for (auto it = m_meta.groups.begin(), end = m_meta.groups.end(); it != end; ++it) {
-			s.set_groups(std::vector<int>({*it}));
+		return s.read_latest(key, 0, 0);
+	}
 
-			results.emplace_back(s.read_data(key, 0, 0));
+	elliptics::async_lookup_result prepare_latest(const std::string &key) {
+		elliptics::session s = session(true);
+
+		if (!m_valid) {
+			elliptics::async_lookup_result result(s);
+			elliptics::async_result_handler<elliptics::lookup_result_entry> handler(result);
+			handler.complete(elliptics::create_error(-EIO, "bucket: %s: valid: %d, reloaded: %d",
+						m_meta.name.c_str(), m_valid, m_reloaded));
+			return result;
 		}
 
-		return results;
+		return s.prepare_latest(key, m_meta.groups);
 	}
 
 	elliptics::async_write_result write(const std::vector<int> groups, const std::string &key,
@@ -231,9 +237,10 @@ public:
 		ctl.fd = -1;
 
 		BH_LOG(m_node->get_log(), DNET_LOG_NOTICE,
-				"%s: bucket write: bucket: %s, key: %s, data-size: %d, reserve-size: %d, cache: %d\n",
+				"%s: bucket write: bucket: %s, key: %s, data-size: %d, reserve-size: %d, cache: %d, ts: %s (%ld.%ld)\n",
 				dnet_dump_id(&id.id()),
-				m_meta.name.c_str(), key.c_str(), data.size(), reserve_size, cache);
+				m_meta.name.c_str(), key.c_str(), data.size(), reserve_size, cache,
+				dnet_print_time(&ctl.io.timestamp), (long)ctl.io.timestamp.tsec, (long)ctl.io.timestamp.tnsec);
 
 		return s.write_data(ctl);
 	}
