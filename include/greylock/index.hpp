@@ -88,120 +88,61 @@ struct remove_recursion {
 	bool removed = false;
 };
 
+static inline const char *greylock_print_time(const struct dnet_time *t, char *dst, int dsize)
+{
+	char str[64];
+	struct tm tm;
+
+	localtime_r((time_t *)&t->tsec, &tm);
+	strftime(str, sizeof(str), "%F %R:%S", &tm);
+
+	snprintf(dst, dsize, "%s.%06llu", str, (long long unsigned) t->tnsec / 1000);
+	return dst;
+}
+
+
 template <typename T>
 class index {
 public:
 	index(T &t, const eurl &sk, bool read_only): m_t(t), m_log(t.logger()), m_sk(sk), m_read_only(read_only) {
 		generate_meta_key();
 
-		std::vector<elliptics::async_read_result> meta = m_t.read_all(meta_key());
-
-		struct separate_index_meta {
-			int group = 0;
-			index_meta meta;
-		};
-
-		std::vector<separate_index_meta> mg;
-
-		for (auto it = meta.begin(), end = meta.end(); it != end; ++it) {
-			for (auto ent = it->begin(), ent_end = it->end(); ent != ent_end; ++ent) {
-				if (!ent->error()) {
-					separate_index_meta tmp;
-
-					msgpack::unpacked result;
-					msgpack::unpack(&result, (const char *)ent->file().data(), ent->file().size());
-					msgpack::object obj = result.get();
-
-					tmp.meta = obj.as<index_meta>();
-					tmp.group = ent->command()->id.group_id;
-
-					mg.emplace_back(tmp);
-
-					break;
-				}
+		if (!m_read_only) {
+			if (need_recovery()) {
+				elliptics::error_info err = index_recovery();
+				if (err)
+					err.throw_error();
 			}
 		}
 
-		if (mg.empty()) {
-			if (!m_read_only) {
+		elliptics::async_read_result meta = m_t.read(meta_key());
+		elliptics::read_result_entry ent = meta.get_one();
+
+		if (meta.error()) {
+			if (meta.error().code() == -ENOENT) {
+				if (m_read_only) {
+					std::ostringstream ss;
+					ss << "index: could not read index metadata from '" << sk.str() <<
+						"' and not allowed to create new index";
+					throw std::runtime_error(ss.str());
+				}
+
 				start_page_init();
 				return;
 			}
 
-			std::ostringstream ss;
-			ss << "index: could not read index metadata from '" << sk.str() << "' and not allowed to create new index";
-			throw std::runtime_error(ss.str());
+			meta.error().throw_error();
 		}
 
-		uint64_t highest_generation_number_sec = 0;
-		uint64_t highest_generation_number_nsec = 0;
-		for (auto it = mg.begin(), end = mg.end(); it != end; ++it) {
-			if (it->meta.generation_number_sec >= highest_generation_number_sec) {
-				highest_generation_number_sec = it->meta.generation_number_sec;
-				highest_generation_number_nsec = it->meta.generation_number_nsec;
-				m_meta = it->meta;
-			} else if (it->meta.generation_number_sec == highest_generation_number_sec) {
-				if (it->meta.generation_number_nsec >= highest_generation_number_nsec) {
-					highest_generation_number_sec = it->meta.generation_number_sec;
-					highest_generation_number_nsec = it->meta.generation_number_nsec;
-					m_meta = it->meta;
-				}
-			}
-		}
+		auto file = ent.file();
 
-		std::vector<int> good_groups;
-		for (auto it = mg.begin(), end = mg.end(); it != end; ++it) {
-			if ((it->meta.generation_number_sec == highest_generation_number_sec) &&
-					(it->meta.generation_number_nsec == highest_generation_number_nsec)) {
-				good_groups.push_back(it->group);
-			}
-		}
-
-		if ((highest_generation_number_sec == 0) && (highest_generation_number_nsec == 0)) {
-			if (!m_read_only) {
-				start_page_init();
-				return;
-			}
-
-			std::ostringstream ss;
-			ss << "index: metadata for index '" << sk.str() << "' is corrupted (all generation numbers are zero) "
-				"and not allowed to create new index";
-			throw std::runtime_error(ss.str());
-		}
-
-		if (good_groups.size() == meta.size())
-			return;
-
-		// do not try to recover read-only index
-		if (m_read_only)
-			return;
-
-		size_t pages_recovered = 0;
-		for (auto it = page_begin(good_groups), end = page_end(); it != end; ++it) {
-			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: recovering page: url: %s, content: %s",
-				it.url().str().c_str(), it->str().c_str());
-
-			int recovered = 0;
-
-			elliptics::async_write_result wr = m_t.write(it.url(), it->save(), default_reserve_size, false);
-			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
-				if (!r->error()) {
-					recovered++;
-				}
-			}
-
-			if (!recovered)
-				break;
-
-			pages_recovered++;
-		}
-
-		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: opened: page_index: %ld, good_groups: %s, pages recovered: %zd",
-				m_meta.page_index, print_groups(good_groups).c_str(), pages_recovered);
+		msgpack::unpacked result;
+		msgpack::unpack(&result, file.data<char>(), file.size());
+		result.get().convert(&m_meta);
 	}
 
 	~index() {
-		if (!m_read_only) {
+		if (!m_read_only && m_modified) {
 			// only sync index metadata at destruction time for performance
 			meta_write();
 		}
@@ -231,6 +172,8 @@ public:
 		if (m_read_only)
 			return elliptics::create_error(-EPERM, "can not insert object '%s' into read-only index", obj.str().c_str());
 
+		m_modified = true;
+
 		recursion tmp;
 		elliptics::error_info err = insert(m_sk, obj, tmp);
 		if (err)
@@ -247,6 +190,8 @@ public:
 	elliptics::error_info remove(const key &obj) {
 		if (m_read_only)
 			return elliptics::create_error(-EPERM, "can not remove object '%s' from read-only index", obj.str().c_str());
+
+		m_modified = true;
 
 		remove_recursion tmp;
 		elliptics::error_info err = remove(m_sk, obj, tmp);
@@ -296,11 +241,11 @@ public:
 	}
 
 	page_iterator<T> page_begin() const {
-		return page_iterator<T>(m_t, m_sk);
+		return page_iterator<T>(m_t, false, m_sk);
 	}
 
-	page_iterator<T> page_begin(const std::vector<int> &groups) const {
-		return page_iterator<T>(m_t, groups, m_sk);
+	page_iterator<T> page_begin_latest() const {
+		return page_iterator<T>(m_t, true, m_sk);
 	}
 
 	page_iterator<T> page_end() const {
@@ -324,6 +269,9 @@ private:
 	const logger &m_log;
 	eurl m_sk;
 	eurl m_meta_url;
+
+	// when true, there was index modification, update its metadata
+	bool m_modified = false;
 
 	// when true, metadata for new index will NOT be created and updated at destruction time
 	// should be TRUE for read-only indexes, for example for indexes created to read metadata
@@ -363,15 +311,93 @@ private:
 		m_meta.num_pages++;
 	}
 
+	elliptics::error_info index_recovery() {
+		size_t pages_recovered = 0;
+
+		for (auto it = page_begin_latest(), end = page_end(); it != end; ++it) {
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: recovering page: url: %s, content: %s",
+				it.url().str().c_str(), it->str().c_str());
+
+			int recovered = 0;
+
+			elliptics::async_write_result wr = m_t.write(it.url(), it->save(), default_reserve_size, false);
+			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
+				if (!r->error()) {
+					recovered++;
+				}
+			}
+
+			if (!recovered) {
+				BH_LOG(m_log, INDEXES_LOG_ERROR, "index: recovering page: url: %s, content: %s: could not recover page",
+						it.url().str().c_str(), it->str().c_str());
+
+				return elliptics::create_error(-ENOEXEC, "index: recovering page: url: %s, content: %s: could not recover page",
+						it.url().str().c_str(), it->str().c_str());
+			}
+
+			pages_recovered++;
+		}
+
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: opened: page_index: %ld, pages recovered: %ld",
+				m_meta.page_index, pages_recovered);
+		return elliptics::error_info();
+	}
+
+	bool need_recovery() {
+		elliptics::async_lookup_result lookup = m_t.prepare_latest(m_sk);
+		lookup.wait();
+
+		if (lookup.error()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: need_recovery: %s requires recovery, prepare_latest error: %s [%d]",
+					m_sk.str().c_str(), lookup.error().message().c_str(), lookup.error().code());
+
+			// if there is no start key, there is nothing to recover
+			if (lookup.error().code() == -ENOENT)
+				return false;
+
+			return true;
+		}
+
+		struct dnet_time first_time;
+		bool empty = true;
+		bool need_recovery = false;
+
+		char info_str[128], first_str[128];
+
+		for (auto begin = lookup.begin(), end = lookup.end(), it = begin; it != end; ++it) {
+			struct dnet_file_info *info = it->file_info();
+
+			if (empty) {
+				first_time = info->mtime;
+				empty = false;
+			}
+
+			if (dnet_time_cmp(&first_time, &info->mtime)) {
+				need_recovery = true;
+			}
+
+			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: need_recovery: %s: group: %d, mtime: %s (%ld.%ld), "
+					"first_time: %s (%ld.%ld), need_recovery: %d",
+					m_sk.str().c_str(), int(it->command()->id.group_id),
+					greylock_print_time(&info->mtime, info_str, sizeof(info_str)), info->mtime.tsec, info->mtime.tnsec,
+					greylock_print_time(&first_time, first_str, sizeof(first_str)), first_time.tsec, first_time.tnsec,
+					need_recovery);
+		}
+
+		return need_recovery;
+	}
+
+
 	std::pair<page, int> search(const eurl &page_key, const key &obj) const {
 		elliptics::async_read_result async = m_t.read(page_key);
+		elliptics::read_result_entry ent = async.get_one();
+
 		if (async.error()) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, async error: %s [%d]",
 				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
 			return std::make_pair(page(), async.error().code());
 		}
 
-		elliptics::read_result_entry ent = async.get_one();
 		if (ent.error()) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, entry error: %s [%d]",
 				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
@@ -406,13 +432,14 @@ private:
 	// key used to store split part has been saved into @obj.url
 	elliptics::error_info insert(const eurl &page_key, const key &obj, recursion &rec) {
 		elliptics::async_read_result async = m_t.read(page_key);
+		elliptics::read_result_entry ent = async.get_one();
+
 		if (async.error()) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, async error: %s [%d]",
 				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
 			return async.error();
 		}
 
-		elliptics::read_result_entry ent = async.get_one();
 		if (ent.error()) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, entry error: %s [%d]",
 				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
@@ -606,13 +633,14 @@ private:
 	// key used to store split part has been saved into @obj.url
 	elliptics::error_info remove(const eurl &page_key, const key &obj, remove_recursion &rec) {
 		elliptics::async_read_result async = m_t.read(page_key);
+		elliptics::read_result_entry ent = async.get_one();
+
 		if (async.error()) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, async error: %s [%d]",
 				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
 			return async.error();
 		}
 
-		elliptics::read_result_entry ent = async.get_one();
 		if (ent.error()) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, entry error: %s [%d]",
 				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
