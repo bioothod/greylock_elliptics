@@ -92,12 +92,13 @@ int main(int argc, char *argv[])
 			url.bucket = bname;
 
 			elliptics::async_read_result async = bt.read(url);
+			elliptics::read_result_entry ent = async.get_one();
+
 			if (async.error()) {
 				std::cerr << "could not read page '" << url.str() << "': " << async.error().message() << std::endl;
 				return async.error().code();
 			}
 
-			elliptics::read_result_entry ent = async.get_one();
 			p.load(ent.file().data(), ent.file().size());
 		} else {
 			std::ifstream in(key_file.c_str());
