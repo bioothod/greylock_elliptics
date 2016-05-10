@@ -49,12 +49,14 @@ struct page {
 				", L" << (is_leaf() ? 1 : 0) <<
 				", N" << objects.size() <<
 				", T" << total_size <<
+				", next:" << next.str() <<
 				")";
 		} else {
 			ss << "[" << 
 				"L" << (is_leaf() ? 1 : 0) <<
 				", N" << objects.size() <<
 				", T" << total_size <<
+				", next:" << next.str() <<
 				")";
 		}
 		return ss.str();
@@ -232,25 +234,17 @@ public:
 	typedef std::ptrdiff_t difference_type;
 
 	page_iterator(T &t, const page &p) : m_t(t), m_page(p) {}
-	page_iterator(T &t, const eurl &url) : m_t(t), m_url(url) {
-		elliptics::async_read_result async = m_t.read(url);
-		if (async.error())
-			return;
+	page_iterator(T &t, bool use_latest, const eurl &url) : m_t(t), m_url(url), m_use_latest(use_latest) {
+		elliptics::async_read_result async;
 
+		if (m_use_latest) {
+			async = m_t.read_latest(url);
+		} else {
+			async = m_t.read(url);
+		}
 		elliptics::read_result_entry e = async.get_one();
-		if (e.error())
-			return;
 
-		auto file = e.file();
-		m_page.load(file.data(), file.size());
-	}
-	page_iterator(T &t, const std::vector<int> &groups, const eurl &url) : m_t(t), m_url(url) {
-		elliptics::async_read_result async = m_t.read(groups, url);
-		if (async.error())
-			return;
-
-		elliptics::read_result_entry e = async.get_one();
-		if (e.error())
+		if (async.error() || e.error())
 			return;
 
 		auto file = e.file();
@@ -258,6 +252,7 @@ public:
 	}
 	page_iterator(const page_iterator &i) : m_t(i.m_t) {
 		m_page = i.m_page;
+		m_use_latest = i.m_use_latest;
 		m_page_index = i.m_page_index;
 	}
 
@@ -296,6 +291,7 @@ private:
 	page m_page;
 	size_t m_page_index = 0;
 	eurl m_url;
+	bool m_use_latest = false;
 
 	void try_loading_next_page() {
 		++m_page_index;
@@ -307,12 +303,16 @@ private:
 			m_url = m_page.next;
 			m_page = page();
 
-			elliptics::async_read_result async = m_t.read(m_url);
-			if (async.error())
-				return;
+			elliptics::async_read_result async;
 
+			if (m_use_latest) {
+				async = m_t.read_latest(m_url);
+			} else {
+				async = m_t.read(m_url);
+			}
 			elliptics::read_result_entry e = async.get_one();
-			if (e.error())
+
+			if (async.error() || e.error())
 				return;
 
 			auto file = e.file();
@@ -360,10 +360,17 @@ public:
 	}
 
 	bool operator==(const self_type& rhs) {
-		return (m_page == rhs.m_page) && (m_page_internal_index == rhs.m_page_internal_index);
+		bool equal = (m_page == rhs.m_page) && (m_page_internal_index == rhs.m_page_internal_index);
+
+		BH_LOG(m_t.logger(), INDEXES_LOG_NOTICE, "iterator: page operator==: %s vs %s, equal: %d",
+				m_page.str(), rhs.m_page.str(), equal);
+		return equal;
 	}
 	bool operator!=(const self_type& rhs) {
-		return (m_page != rhs.m_page) || (m_page_internal_index != rhs.m_page_internal_index);
+		bool not_equal = (m_page != rhs.m_page) || (m_page_internal_index != rhs.m_page_internal_index);
+		BH_LOG(m_t.logger(), INDEXES_LOG_NOTICE, "iterator: page operator!=: %s vs %s, not-equal: %d",
+				m_page.str(), rhs.m_page.str(), not_equal);
+		return not_equal;
 	}
 private:
 	T &m_t;
@@ -376,18 +383,19 @@ private:
 			m_page_internal_index = 0;
 			++m_page_index;
 
+			BH_LOG(m_t.logger(), INDEXES_LOG_NOTICE, "iterator: loading next page: %s",
+					m_page.str());
+
 			if (m_page.next.empty()) {
 				m_page = page();
 			} else {
-				m_page = page();
-
 				elliptics::async_read_result async = m_t.read(m_page.next);
-				if (async.error())
-					return;
-
 				elliptics::read_result_entry e = async.get_one();
-				if (e.error())
+
+				if (async.error() || e.error()) {
+					m_page = page();
 					return;
+				}
 
 				auto file = e.file();
 				m_page.load(file.data(), file.size());
