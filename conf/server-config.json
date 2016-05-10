@@ -1,12 +1,12 @@
 {
     "endpoints": [
-        "0.0.0.0:8080"
+        "0.0.0.0:8081"
     ],
     "backlog": 512,
     "threads": 10,
     "buffer_size": 65536,
 	"logger": {
-        "level": "debug",
+        "level": "notice",
         "frontends": [
             {
                 "formatter": {
@@ -41,13 +41,7 @@
 	    "b1",
 	    "b2",
 	    "b3",
-	    "b4",
-	    "b5",
-	    "b77",
-	    "b89",
-	    "bucket:12.21",
-	    "bucket:22.31",
-	    "bucket:32.11"
+	    "b4"
 	],
 	"meta-bucket": "b1",
 	"max-page-size": 6144,
