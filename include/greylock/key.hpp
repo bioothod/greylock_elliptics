@@ -61,7 +61,7 @@ struct key {
 	std::string str() const {
 		long tsec, tnsec;
 		get_timestamp(tsec, tnsec);
-		return id + ":" + url.str() + ":" + elliptics::lexical_cast(tsec) + "." + elliptics::lexical_cast(tnsec);
+		return id + ":" + url.str() + ":" + std::to_string(tsec) + "." + std::to_string(tnsec);
 	}
 };
 
