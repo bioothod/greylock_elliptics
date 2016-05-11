@@ -1,6 +1,7 @@
 #ifndef __INDEXES_INDEX_HPP
 #define __INDEXES_INDEX_HPP
 
+#include "greylock/io.hpp"
 #include "greylock/page.hpp"
 
 #include <atomic>
@@ -101,10 +102,10 @@ static inline const char *greylock_print_time(const struct dnet_time *t, char *d
 }
 
 
-template <typename T>
 class index {
 public:
-	index(T &t, const eurl &sk, bool read_only): m_t(t), m_log(t.logger()), m_sk(sk), m_read_only(read_only) {
+	index(ebucket::bucket_processor &bp, const eurl &sk, bool read_only) :
+			m_bp(bp), m_log(bp.logger()), m_sk(sk), m_read_only(read_only) {
 		generate_meta_key();
 
 		if (!m_read_only) {
@@ -115,30 +116,55 @@ public:
 			}
 		}
 
-		elliptics::async_read_result meta = m_t.read(meta_key());
-		elliptics::read_result_entry ent = meta.get_one();
+		auto async = io::read_data(m_bp, meta_key(), false);
+		if (!async.is_valid()) {
+			elliptics::throw_error(-EINVAL, "invalid async read result for index %s", sk.str().c_str());
+		}
 
-		if (meta.error()) {
-			if (meta.error().code() == -ENOENT) {
+		if (async.error()) {
+			if (async.error().code() == -ENOENT) {
 				if (m_read_only) {
-					std::ostringstream ss;
-					ss << "index: could not read index metadata from '" << sk.str() <<
-						"' and not allowed to create new index";
-					throw std::runtime_error(ss.str());
+					elliptics::throw_error(-EROFS, "index: could not read index metadata from '%s' "
+							"and not allowed to create new index",
+						sk.str().c_str());
 				}
 
 				start_page_init();
 				return;
 			}
 
-			meta.error().throw_error();
+			async.error().throw_error();
 		}
 
-		auto file = ent.file();
+		elliptics::read_result_entry ent = async.get_one();
+		if (ent.error() || !ent.is_valid()) {
+			// invalid entry means there are no positive results
+			if ((ent.error().code() == -ENOENT) || !ent.is_valid()) {
+				if (m_read_only) {
+					elliptics::throw_error(-EROFS, "index: could not read index metadata from '%s' "
+							"and not allowed to create new index",
+						sk.str().c_str());
+				}
 
-		msgpack::unpacked result;
-		msgpack::unpack(&result, file.data<char>(), file.size());
-		result.get().convert(&m_meta);
+				start_page_init();
+				return;
+			}
+
+			ent.error().throw_error();
+		}
+
+		const auto &file = ent.file();
+
+		try {
+			msgpack::unpacked result;
+			msgpack::unpack(&result, file.data<char>(), file.size());
+			result.get().convert(&m_meta);
+		} catch (const std::exception &e) {
+			BH_LOG(bp.logger(), INDEXES_LOG_ERROR, "failed to unpack start page: bucket: %s, key: %s, data size: %ld",
+					meta_key().bucket.c_str(), meta_key().key.c_str(), file.size());
+			elliptics::throw_error(-EINVAL, "failed to unpack start page: bucket: %s, key: %s, data size: %ld",
+					meta_key().bucket.c_str(), meta_key().key.c_str(), file.size());
+		}
 	}
 
 	~index() {
@@ -175,7 +201,10 @@ public:
 		m_modified = true;
 
 		recursion tmp;
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: start: sk: %s, key: %s", m_sk.str().c_str(), obj.str().c_str());
 		elliptics::error_info err = insert(m_sk, obj, tmp);
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: completed: sk: %s, key: %s, err: %s [%d]",
+				m_sk.str().c_str(), obj.str().c_str(), err.message(), err.code());
 		if (err)
 			return err;
 
@@ -193,8 +222,11 @@ public:
 
 		m_modified = true;
 
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "remove: start: sk: %s, key: %s", m_sk.str().c_str(), obj.str().c_str());
 		remove_recursion tmp;
 		elliptics::error_info err = remove(m_sk, obj, tmp);
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "remove: completed: sk: %s, key: %s, err: %s [%d]",
+				m_sk.str().c_str(), obj.str().c_str(), err.message(), err.code());
 		if (err)
 			return err;
 
@@ -202,7 +234,7 @@ public:
 		return err;
 	}
 
-	iterator<T> begin(const std::string &k) const {
+	iterator begin(const std::string &k) const {
 		key zero;
 		zero.id = k;
 
@@ -210,16 +242,16 @@ public:
 		if (found.second < 0)
 			found.second = 0;
 
-		return iterator<T>(m_t, found.first, found.second);
+		return iterator(m_bp, found.first, found.second);
 	}
 
-	iterator<T> begin() const {
+	iterator begin() const {
 		return begin(std::string("\0"));
 	}
 
-	iterator<T> end() const {
+	iterator end() const {
 		page p;
-		return iterator<T>(m_t, p, 0);
+		return iterator(m_bp, p, 0);
 	}
 
 	std::vector<key> keys(const std::string &start) const {
@@ -240,17 +272,17 @@ public:
 		return ret;
 	}
 
-	page_iterator<T> page_begin() const {
-		return page_iterator<T>(m_t, false, m_sk);
+	page_iterator page_begin() const {
+		return page_iterator(m_bp, false, m_sk);
 	}
 
-	page_iterator<T> page_begin_latest() const {
-		return page_iterator<T>(m_t, true, m_sk);
+	page_iterator page_begin_latest() const {
+		return page_iterator(m_bp, true, m_sk);
 	}
 
-	page_iterator<T> page_end() const {
+	page_iterator page_end() const {
 		page p;
-		return page_iterator<T>(m_t, p);
+		return page_iterator(m_bp, p);
 	}
 
 	std::string print_groups(const std::vector<int> &groups) const {
@@ -265,7 +297,7 @@ public:
 	}
 
 private:
-	T &m_t;
+	ebucket::bucket_processor &m_bp;
 	const logger &m_log;
 	eurl m_sk;
 	eurl m_meta_url;
@@ -290,7 +322,7 @@ private:
 		const char *mns = "meta\0meta\0";
 		std::string ns(mns, 10);
 
-		m_meta_url.key = m_t.generate(ns, m_sk.key);
+		m_meta_url.key = io::generate(m_bp, ns, m_sk.key);
 	}
 
 	void meta_write() {
@@ -298,7 +330,7 @@ private:
 		msgpack::pack(ss, m_meta);
 
 		std::string ms = ss.str();
-		m_t.write(meta_key(), ms, 0, true);
+		io::write(m_bp, meta_key(), ms, 0, true);
 
 		BH_LOG(m_log, INDEXES_LOG_INFO, "index: meta updated: key: %s, meta: %s, size: %d",
 				meta_key().str(), m_meta.str().c_str(), ms.size());
@@ -307,7 +339,7 @@ private:
 	void start_page_init() {
 		page start_page;
 
-		m_t.write(m_sk, start_page.save(), 0, true);
+		io::write(m_bp, m_sk, start_page.save(), 0, true);
 		m_meta.num_pages++;
 	}
 
@@ -320,7 +352,7 @@ private:
 
 			int recovered = 0;
 
-			elliptics::async_write_result wr = m_t.write(it.url(), it->save(), default_reserve_size, false);
+			elliptics::async_write_result wr = io::write(m_bp, it.url(), it->save(), default_reserve_size, false);
 			for (auto r = wr.begin(), end = wr.end(); r != end; ++r) {
 				if (!r->error()) {
 					recovered++;
@@ -331,7 +363,8 @@ private:
 				BH_LOG(m_log, INDEXES_LOG_ERROR, "index: recovering page: url: %s, content: %s: could not recover page",
 						it.url().str().c_str(), it->str().c_str());
 
-				return elliptics::create_error(-ENOEXEC, "index: recovering page: url: %s, content: %s: could not recover page",
+				return elliptics::create_error(-ENOEXEC,
+						"index: recovering page: url: %s, content: %s: could not recover page",
 						it.url().str().c_str(), it->str().c_str());
 			}
 
@@ -344,7 +377,7 @@ private:
 	}
 
 	bool need_recovery() {
-		elliptics::async_lookup_result lookup = m_t.prepare_latest(m_sk);
+		elliptics::async_lookup_result lookup = io::prepare_latest(m_bp, m_sk);
 		lookup.wait();
 
 		if (lookup.error()) {
@@ -389,18 +422,22 @@ private:
 
 
 	std::pair<page, int> search(const eurl &page_key, const key &obj) const {
-		elliptics::async_read_result async = m_t.read(page_key);
+		elliptics::async_read_result async = io::read_data(m_bp, page_key, false);
 		elliptics::read_result_entry ent = async.get_one();
 
-		if (async.error()) {
-			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, async error: %s [%d]",
-				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
+		if (async.error() || !async.is_valid()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, "
+					"async: is_valid: %d, error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(),
+				async.is_valid(), async.error().message(), async.error().code());
 			return std::make_pair(page(), async.error().code());
 		}
 
-		if (ent.error()) {
-			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, entry error: %s [%d]",
-				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
+		if (ent.error() || !ent.is_valid()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: search: %s: page: %s, could not read page, "
+					"entry: is_valid: %d, error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(),
+				ent.is_valid(), ent.error().message(), ent.error().code());
 			return std::make_pair(page(), ent.error().code());
 		}
 
@@ -431,18 +468,22 @@ private:
 	// returns true if page at @page_key has been split after insertion
 	// key used to store split part has been saved into @obj.url
 	elliptics::error_info insert(const eurl &page_key, const key &obj, recursion &rec) {
-		elliptics::async_read_result async = m_t.read(page_key);
+		elliptics::async_read_result async = io::read_data(m_bp, page_key, false);
 		elliptics::read_result_entry ent = async.get_one();
 
-		if (async.error()) {
-			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, async error: %s [%d]",
-				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
+		if (async.error() || !async.is_valid()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, "
+					"async: is_valid: %d, error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(),
+				async.is_valid(), async.error().message(), async.error().code());
 			return async.error();
 		}
 
-		if (ent.error()) {
-			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, entry error: %s [%d]",
-				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
+		if (ent.error() || !ent.is_valid()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: insert: %s: page: %s, could not read page, "
+					"entry: is_valid: %d, error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(),
+				ent.is_valid(), ent.error().message(), ent.error().code());
 			return ent.error();
 		}
 
@@ -481,7 +522,7 @@ private:
 				leaf.insert_and_split(obj, unused_split, replaced);
 				if (!replaced)
 					m_meta.num_keys++;
-				err = check(m_t.write(leaf_key.url, leaf.save(), default_reserve_size, true));
+				err = check(io::write(m_bp, leaf_key.url, leaf.save(), default_reserve_size, true));
 				if (err)
 					return err;
 
@@ -490,7 +531,7 @@ private:
 				// do not increment @num_keys since it is not a leaf page
 				p.insert_and_split(leaf_key, unused_split, replaced);
 				p.next = leaf_key.url;
-				err = check(m_t.write(page_key, p.save(), default_reserve_size, true));
+				err = check(io::write(m_bp, page_key, p.save(), default_reserve_size, true));
 				if (err)
 					return err;
 
@@ -573,7 +614,7 @@ private:
 					obj.str().c_str(),
 					page_key.str().c_str(), p.str().c_str(),
 					rec.split_key.str().c_str(), split.str().c_str());
-			err = check(m_t.write(rec.split_key.url, split.save(), default_reserve_size, true));
+			err = check(io::write(m_bp, rec.split_key.url, split.save(), default_reserve_size, true));
 			if (err)
 				return err;
 
@@ -594,7 +635,7 @@ private:
 			if (err)
 				return err;
 
-			err = check(m_t.write(old_root_key.url, p.save(), default_reserve_size, true));
+			err = check(io::write(m_bp, old_root_key.url, p.save(), default_reserve_size, true));
 			if (err)
 				return err;
 
@@ -608,7 +649,7 @@ private:
 
 			new_root.next = new_root.objects.front().url;
 
-			err = check(m_t.write(m_sk, new_root.save(), default_reserve_size, true));
+			err = check(io::write(m_bp, m_sk, new_root.save(), default_reserve_size, true));
 			if (err)
 				return err;
 
@@ -623,7 +664,7 @@ private:
 		} else {
 			BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: %s: write main page: %s -> %s",
 				obj.str().c_str(), page_key.str().c_str(), p.str().c_str());
-			err = check(m_t.write(page_key, p.save(), default_reserve_size, true));
+			err = check(io::write(m_bp, page_key, p.save(), default_reserve_size, true));
 		}
 
 		return err;
@@ -632,18 +673,22 @@ private:
 	// returns true if page at @page_key has been split after insertion
 	// key used to store split part has been saved into @obj.url
 	elliptics::error_info remove(const eurl &page_key, const key &obj, remove_recursion &rec) {
-		elliptics::async_read_result async = m_t.read(page_key);
+		elliptics::async_read_result async = io::read_data(m_bp, page_key, false);
 		elliptics::read_result_entry ent = async.get_one();
 
-		if (async.error()) {
-			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, async error: %s [%d]",
-				obj.str().c_str(), page_key.str().c_str(), async.error().message(), async.error().code());
+		if (async.error() || !async.is_valid()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, "
+					"async: is_valid: %d, error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(),
+				async.is_valid(), async.error().message(), async.error().code());
 			return async.error();
 		}
 
-		if (ent.error()) {
-			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, entry error: %s [%d]",
-				obj.str().c_str(), page_key.str().c_str(), ent.error().message(), ent.error().code());
+		if (ent.error() || !ent.is_valid()) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: remove: %s: page: %s, could not read page, "
+					"entry: is_valid: %d, error: %s [%d]",
+				obj.str().c_str(), page_key.str().c_str(),
+				ent.is_valid(), ent.error().message(), ent.error().code());
 			return ent.error();
 		}
 
@@ -691,8 +736,14 @@ private:
 			if (!rec.page_start)
 				return elliptics::error_info();
 
+			key found = p.objects[found_pos];
+
 			// the first key of the underlying page has been changed, update appropriate key in the current page
-			found = p.objects[found_pos] = rec.page_start;
+			// @url must be saved, but @id and @timestmap have to be copied, since they have been changed
+			found.id = rec.page_start.id;
+			found.timestamp = rec.page_start.timestamp;
+
+			p.objects[found_pos] = found;
 		}
 
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: remove: %s: returned: %s -> %s, found_pos: %d, found_key: %s",
@@ -710,14 +761,14 @@ private:
 				rec.page_start = p.objects.front();
 			}
 
-			err = check(m_t.write(page_key, p.save(), default_reserve_size, 0));
+			err = check(io::write(m_bp, page_key, p.save(), default_reserve_size, 0));
 			if (err)
 				return err;
 		} else {
 			// if current page is empty, we have to remove appropriate link from the higher page
 			rec.removed = true;
 
-			err = check(m_t.remove(page_key));
+			err = check(io::remove(m_bp, page_key));
 			if (err)
 				return err;
 
@@ -730,7 +781,7 @@ private:
 	}
 
 	elliptics::error_info generate_page_url(eurl &url) {
-		elliptics::error_info err = m_t.get_bucket(default_reserve_size, url.bucket);
+		elliptics::error_info err = m_bp.get_bucket(default_reserve_size, url.bucket);
 		if (err) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: generate_page_url: could not get bucket, "
 				"generated page URL will not be valid: %s [%d]",
@@ -738,7 +789,7 @@ private:
 			return err;
 		}
 
-		url.key = m_meta_url.key + "." + elliptics::lexical_cast(m_meta.page_index.fetch_add(1));
+		url.key = m_meta_url.key + "." + std::to_string(m_meta.page_index.fetch_add(1));
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key url: %s", url.str().c_str());
 		return elliptics::error_info();
 	}
@@ -786,16 +837,14 @@ private:
 	}
 };
 
-template<typename T>
-class read_only_index: public index<T> {
+class read_only_index: public index {
 public:
-	read_only_index(T &t, const eurl &start): index<T>(t, start, true) {}
+	read_only_index(ebucket::bucket_processor &bp, const eurl &start): index(bp, start, true) {}
 };
 
-template<typename T>
-class read_write_index: public index<T> {
+class read_write_index: public index {
 public:
-	read_write_index(T &t, const eurl &start): index<T>(t, start, false) {}
+	read_write_index(ebucket::bucket_processor &bp, const eurl &start): index(bp, start, false) {}
 };
 
 }} // namespace ioremap::greylock

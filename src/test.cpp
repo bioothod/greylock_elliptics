@@ -1,8 +1,9 @@
 #include <algorithm>
 #include <iostream>
 
-#include "greylock/bucket_processor.hpp"
 #include "greylock/intersection.hpp"
+
+#include <ebucket/bucket_processor.hpp>
 
 #include <boost/program_options.hpp>
 
@@ -10,28 +11,27 @@
 
 using namespace ioremap;
 
-template <typename T>
 class test {
 #define __stringify_1(x...)     (const char *)#x
 #define __stringify(x...)       __stringify_1(x)
 #define func(name, args...) __stringify(name), name, ##args
 public:
-	test(T &t, const std::string &bname) : m_bucket(bname) {
+	test(ebucket::bucket_processor &bp, const std::string &bname) : m_bucket(bname) {
 		greylock::eurl start;
 		start.key = "test" + elliptics::lexical_cast(rand());
 		start.bucket = m_bucket;
 
-		greylock::read_write_index<T> idx(t, start);
+		greylock::read_write_index idx(bp, start);
 
-		test::run(this, func(&test::test_remove_some_keys, t, 10000));
+		test::run(this, func(&test::test_remove_some_keys, bp, 10000));
 
 		std::vector<greylock::key> keys;
-		test::run(this, func(&test::test_index_recovery, t, 10000));
+		test::run(this, func(&test::test_index_recovery, bp, 10000));
 		test::run(this, func(&test::test_insert_many_keys, idx, keys, 10000));
 		test::run(this, func(&test::test_page_iterator, idx));
 		test::run(this, func(&test::test_iterator_number, idx, keys));
 		test::run(this, func(&test::test_select_many_keys, idx, keys));
-		test::run(this, func(&test::test_intersection, t, 3, 5000, 10000));
+		test::run(this, func(&test::test_intersection, bp, 3, 5000, 10000));
 	}
 
 private:
@@ -49,7 +49,7 @@ private:
 		}
 	}
 
-	void test_insert_many_keys(greylock::read_write_index<T> &idx, std::vector<greylock::key> &keys, int max) {
+	void test_insert_many_keys(greylock::read_write_index &idx, std::vector<greylock::key> &keys, int max) {
 		for (int i = 0; i < max; ++i) {
 			greylock::key k;
 
@@ -69,12 +69,12 @@ private:
 		}
 	}
 
-	void test_remove_some_keys(T &t, int max) {
+	void test_remove_some_keys(ebucket::bucket_processor &bp, int max) {
 		greylock::eurl start;
 		start.key = "remove-test-index." + elliptics::lexical_cast(rand());
 		start.bucket = m_bucket;
 
-		greylock::read_write_index<T> idx(t, start);
+		greylock::read_write_index idx(bp, start);
 		std::vector<greylock::key> keys;
 
 		for (int i = 0; i < max; ++i) {
@@ -91,7 +91,8 @@ private:
 
 			elliptics::error_info err = idx.insert(k);
 			if (err) {
-				printf("remote-test: insert key: %s, error: %s [%d]\n", k.str().c_str(), err.message().c_str(), err.code());
+				printf("remote-test: insert key: %s, error: %s [%d]\n",
+						k.str().c_str(), err.message().c_str(), err.code());
 				std::ostringstream ss;
 				ss << "failed to insert key: " << k.str() << ": " << err.message();
 				throw std::runtime_error(ss.str());
@@ -105,7 +106,8 @@ private:
 		for (auto it = keys.begin(), end = keys.begin() + del_num; it != end; ++it) {
 			elliptics::error_info err = idx.remove(*it);
 			if (err) {
-				printf("remote-test: remove key: %s, error: %s [%d]\n", it->str().c_str(), err.message().c_str(), err.code());
+				printf("remote-test: remove key: %s, error: %s [%d]\n",
+						it->str().c_str(), err.message().c_str(), err.code());
 				std::ostringstream ss;
 				ss << "failed to remove key: " << it->str() << ": " << err.message();
 				throw std::runtime_error(ss.str());
@@ -150,13 +152,15 @@ private:
 		}
 	}
 
-	void test_index_recovery(T &t, int max) {
+	void test_index_recovery(ebucket::bucket_processor &bp, int max) {
+		(void) bp;
+		(void) max;
 #if 0
 		greylock::eurl name;
 		name.key = "recovery-test." + elliptics::lexical_cast(rand());
 		name.bucket = m_bucket;
 
-		greylock::read_write_index<T> idx(t, name);
+		greylock::read_write_index idx(t, name);
 		std::vector<int> groups = idx.get_groups();
 
 		std::vector<greylock::key> keys;
@@ -183,7 +187,7 @@ private:
 		idx.set_groups(groups);
 		ribosome::timer tm;
 		// index constructor self-heals itself
-		greylock::read_write_index<T> rec(t, name);
+		greylock::read_write_index rec(t, name);
 
 		groups = rec.get_groups();
 		std::vector<int> tmp;
@@ -224,7 +228,7 @@ private:
 #endif
 	}
 
-	void test_select_many_keys(greylock::read_write_index<T> &idx, std::vector<greylock::key> &keys) {
+	void test_select_many_keys(greylock::read_write_index &idx, std::vector<greylock::key> &keys) {
 		for (auto it = keys.begin(); it != keys.end(); ++it) {
 			greylock::key k;
 
@@ -251,7 +255,7 @@ private:
 		}
 	}
 
-	void test_iterator_number(greylock::read_write_index<T> &idx, std::vector<greylock::key> &keys) {
+	void test_iterator_number(greylock::read_write_index &idx, std::vector<greylock::key> &keys) {
 		size_t num = 0;
 		for (auto it = idx.begin(), end = idx.end(); it != end; ++it) {
 			dprintf("iterator: %s\n", it->str().c_str());
@@ -265,7 +269,7 @@ private:
 		}
 	}
 
-	void test_page_iterator(greylock::read_write_index<T> &idx) {
+	void test_page_iterator(greylock::read_write_index &idx) {
 		size_t page_num = 0;
 		size_t leaf_num = 0;
 		for (auto it = idx.page_begin(), end = idx.page_end(); it != end; ++it) {
@@ -298,7 +302,7 @@ private:
 		}
 	}
 
-	void test_intersection(T &t, int num_indexes, size_t same_num, size_t different_num) {
+	void test_intersection(ebucket::bucket_processor &bp, int num_indexes, size_t same_num, size_t different_num) {
 		std::vector<greylock::eurl> indexes;
 		std::vector<greylock::key> same; // documents which are present in every index
 
@@ -317,7 +321,7 @@ private:
 			url.key = "intersection-index.rand." + elliptics::lexical_cast(i) + "." + elliptics::lexical_cast(rand());
 			indexes.push_back(url);
 
-			greylock::read_write_index<T> idx(t, url);
+			greylock::read_write_index idx(bp, url);
 
 			for (size_t j = 0; j < different_num; ++j) {
 				greylock::key k;
@@ -335,7 +339,8 @@ private:
 		}
 
 		struct index_checker {
-			index_checker(const greylock::intersect::result &res, const std::vector<greylock::eurl> &requested_indexes, size_t same_num) {
+			index_checker(const greylock::intersect::result &res,
+					const std::vector<greylock::eurl> &requested_indexes, size_t same_num) {
 				if (res.docs.size() != same_num) {
 					std::ostringstream ss;
 					ss << "intersection failed: total number of documents found: " << res.docs.size() <<
@@ -352,7 +357,9 @@ private:
 						throw std::runtime_error(ss.str());
 					}
 
-					for (auto req = requested_indexes.begin(), req_end = requested_indexes.end(); req != req_end; ++req) {
+					for (auto req = requested_indexes.begin(), req_end = requested_indexes.end();
+							req != req_end;
+							++req) {
 						auto f = std::find_if(doc->indexes.begin(), doc->indexes.end(),
 								[&] (const greylock::key &k) { return *req == k.url; });
 						if (f == doc->indexes.end()) {
@@ -379,7 +386,7 @@ private:
 		};
 
 		ribosome::timer tm;
-		greylock::intersect::intersector<T> inter(t);
+		greylock::intersect::intersector inter(bp);
 		greylock::intersect::result res = inter.intersect(indexes);
 
 		auto check_intersection = [&] () {
@@ -391,7 +398,8 @@ private:
 				dprintf("\n");
 			}
 
-			printf("intersection: requested number of indexes: %d, found documents: %zd, must be: %zd, total number of documents: %zd, "
+			printf("intersection: requested number of indexes: %d, "
+					"found documents: %zd, must be: %zd, total number of documents: %zd, "
 					"total indexes in each document: %zd, time: %ld ms\n",
 					num_indexes, res.docs.size(), same_num, same_num + different_num,
 					res.docs[0].indexes.size(), tm.restart());
@@ -401,7 +409,7 @@ private:
 
 		check_intersection();
 
-		greylock::intersect::intersector<T> p(t);
+		greylock::intersect::intersector p(bp);
 		std::string start("\0");
 		size_t num = same_num / 10;
 		size_t num_found = 0;
@@ -424,14 +432,16 @@ private:
 				break;
 		}
 
-		printf("paginated intersection: requested number of indexes: %d, found documents: %zd, must be: %zd, total number of documents: %zd, "
+		printf("paginated intersection: requested number of indexes: %d, "
+				"found documents: %zd, must be: %zd, total number of documents: %zd, "
 				"total indexes in each document: %zd, time: %ld ms\n",
 				num_indexes, num_found, same_num, same_num + different_num,
 				res.docs[0].indexes.size(), tm.restart());
 
 		if (num_found != same_num) {
 			std::ostringstream ss;
-			ss << "paginated intersection failed: indexes: " << num_indexes << ", same keys in each index: " << same_num <<
+			ss << "paginated intersection failed: indexes: " << num_indexes <<
+				", same keys in each index: " << same_num <<
 				", found keys: " << num_found <<
 				", total keys in each index: " << different_num + same_num;
 			throw std::runtime_error(ss.str());
@@ -459,7 +469,8 @@ int main(int argc, char *argv[])
 		("log-file", bpo::value<std::string>(&log_file)->default_value("/dev/stdout"), "log file")
 		("log-level", bpo::value<std::string>(&log_level)->default_value("error"), "log level: error, info, notice, debug")
 		("groups", bpo::value<std::string>(&groups)->required(), "groups where index tree is stored: 1:2:3")
-		("bucket", bpo::value<std::vector<std::string>>(&bnames)->composing(), "use this bucket in tests")
+		("bucket", bpo::value<std::vector<std::string>>(&bnames)->composing(),
+		 	"use these buckets in tests (can be set multiple times)")
 		;
 
 	bpo::options_description cmdline_options;
@@ -492,15 +503,19 @@ int main(int argc, char *argv[])
 	std::vector<elliptics::address> rem(remotes.begin(), remotes.end());
 	node->add_remote(rem);
 
-	greylock::bucket_processor bt(node);
+	ebucket::bucket_processor bp(node);
 
-	if (!bt.init(elliptics::parse_groups(groups.c_str()), bnames)) {
-		std::cerr << "Could not initialize bucket transport, exiting";
+	if (!bp.init(elliptics::parse_groups(groups.c_str()), bnames)) {
+		std::cerr << "Could not initialize bucket transport, exiting" << std::endl;
 		return -1;
 	}
 
-	bt.test();
+	try {
+		bp.test();
 
-	test<greylock::bucket_processor> tt(bt, bnames[0]);
+		test tt(bp, bnames[0]);
+	} catch (const std::exception &e) {
+		std::cerr << "test failed: " << e.what() << std::endl;
+	}
 	return 0;
 }

@@ -1,10 +1,10 @@
-#include "greylock/bucket_processor.hpp"
 #include "greylock/core.hpp"
 #include "greylock/index.hpp"
 #include "greylock/intersection.hpp"
 #include "greylock/json.hpp"
 
 
+#include <ebucket/bucket_processor.hpp>
 #include <elliptics/session.hpp>
 
 #include <unistd.h>
@@ -485,7 +485,7 @@ public:
 		bool intersect(const thevoid::http_request &req, indexes_request &ireq, greylock::intersect::result &result) {
 			ribosome::timer tm;
 
-			greylock::intersect::intersector<greylock::bucket_processor> p(*(server()->bucket()));
+			greylock::intersect::intersector p(*(server()->bucket()));
 
 			std::vector<ribosome::locker<http_server>> lockers;
 			lockers.reserve(ireq.indexes.size());
@@ -551,7 +551,7 @@ public:
 				std::unique_lock<ribosome::locker<http_server>> lk(l);
 
 				try {
-					greylock::read_write_index<greylock::bucket_processor> index(*(server()->bucket()), iname);
+					greylock::read_write_index index(*(server()->bucket()), iname);
 
 					elliptics::error_info err = index.insert(doc);
 					if (err) {
@@ -694,7 +694,7 @@ public:
 		}
 	};
 
-	std::shared_ptr<greylock::bucket_processor> bucket() {
+	std::shared_ptr<ebucket::bucket_processor> bucket() {
 		return m_bucket;
 	}
 
@@ -769,7 +769,7 @@ private:
 	std::shared_ptr<elliptics::node> m_node;
 
 	std::string m_meta_bucket;
-	std::shared_ptr<greylock::bucket_processor> m_bucket;
+	std::shared_ptr<ebucket::bucket_processor> m_bucket;
 
 	long m_read_timeout = 60;
 	long m_write_timeout = 60;
@@ -788,7 +788,7 @@ private:
 			return false;
 		}
 
-		m_bucket.reset(new greylock::bucket_processor(m_node));
+		m_bucket.reset(new ebucket::bucket_processor(m_node));
 
 		if (!prepare_session(config)) {
 			return false;

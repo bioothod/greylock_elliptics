@@ -1,9 +1,10 @@
 #include <fstream>
 #include <iostream>
 
-#include "greylock/bucket_processor.hpp"
 #include "greylock/intersection.hpp"
+#include "greylock/io.hpp"
 
+#include <ebucket/bucket_processor.hpp>
 #include <boost/program_options.hpp>
 
 using namespace ioremap;
@@ -34,6 +35,7 @@ int main(int argc, char *argv[])
 	gr.add_options()
 		("bucket", bpo::value<std::string>(&bname), "bucket, where given page lives")
 		("key", bpo::value<std::string>(&key_name), "page key string")
+		("full", "dump whole page, not only begin/end/meta info")
 		("key-file", bpo::value<std::string>(&key_file), "file where page data lives")
 		;
 
@@ -81,8 +83,8 @@ int main(int argc, char *argv[])
 			std::vector<elliptics::address> rem(remotes.begin(), remotes.end());
 			node->add_remote(rem);
 
-			greylock::bucket_processor bt(node);
-			if (!bt.init(elliptics::parse_groups(metagroups.c_str()), std::vector<std::string>({bname}))) {
+			ebucket::bucket_processor bp(node);
+			if (!bp.init(elliptics::parse_groups(metagroups.c_str()), std::vector<std::string>({bname}))) {
 				std::cerr << "Could not initialize bucket transport, exiting";
 				return -1;
 			}
@@ -91,12 +93,16 @@ int main(int argc, char *argv[])
 			url.key = key_name;
 			url.bucket = bname;
 
-			elliptics::async_read_result async = bt.read(url);
-			elliptics::read_result_entry ent = async.get_one();
-
+			elliptics::async_read_result async = greylock::io::read_data(bp, url, false);
 			if (async.error()) {
 				std::cerr << "could not read page '" << url.str() << "': " << async.error().message() << std::endl;
 				return async.error().code();
+			}
+			elliptics::read_result_entry ent = async.get_one();
+			if (ent.error()) {
+				std::cerr << "could not read page (error entry) '" << url.str() <<
+					"': " << ent.error().message() << std::endl;
+				return ent.error().code();
 			}
 
 			p.load(ent.file().data(), ent.file().size());
@@ -110,6 +116,13 @@ int main(int argc, char *argv[])
 		}
 
 		std::cout << "page: " << p.str() << std::endl;
+
+		if (vm.count("full")) {
+			for (auto &k: p.objects) {
+				std::cout << "\t" << k.str() << std::endl;
+			}
+		}
+
 	} catch (const std::exception &e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	}

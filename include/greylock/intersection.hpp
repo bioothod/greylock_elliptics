@@ -36,10 +36,10 @@ struct result {
 	std::vector<single_doc_result> docs;
 };
 
-template <typename T>
 class intersector {
 public:
-	intersector(T &t) : m_t(t) {}
+	intersector(ebucket::bucket_processor &bp) : m_bp(bp) {}
+
 	result intersect(const std::vector<eurl> &indexes) const {
 		std::string start = std::string("\0");
 		return intersect(indexes, start, INT_MAX);
@@ -63,11 +63,11 @@ public:
 	result intersect(const std::vector<eurl> &indexes, std::string &start, size_t num,
 			const std::function<bool (const std::vector<eurl> &, result &)> &finish) const {
 		struct iter {
-			read_only_index<T> idx;
-			greylock::iterator<T> begin, end;
+			read_only_index idx;
+			greylock::iterator begin, end;
 
-			iter(T &t, const eurl &iname, const std::string &start) :
-				idx(t, iname),
+			iter(ebucket::bucket_processor &bp, const eurl &iname, const std::string &start) :
+				idx(bp, iname),
 				begin(idx.begin(start)), end(idx.end())
 			{}
 		};
@@ -79,7 +79,7 @@ public:
 		idata.reserve(indexes.size());
 
 		for (auto it = indexes.begin(), end = indexes.end(); it != end; ++it) {
-			iter itr(m_t, *it, start);
+			iter itr(m_bp, *it, start);
 			idata.emplace_back(std::move(itr));
 		}
 
@@ -181,7 +181,7 @@ public:
 
 				auto &min_it = idata[pos[0]].begin;
 
-				BH_LOG(m_t.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s, it-index: %s, id: %s",
+				BH_LOG(m_bp.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s, it-index: %s, id: %s",
 						idata[pos[0]].idx.start().str(), min_it->str(),
 						idata_it->idx.start().str(), it->str());
 
@@ -214,7 +214,7 @@ public:
 					if (min_it != idata[*it].end)
 						min_str = min_it->str();
 
-					BH_LOG(m_t.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s increasing to %s",
+					BH_LOG(m_bp.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s increasing to %s",
 							idata[*it].idx.start().str(), prev_str, min_str);
 				}
 
@@ -254,7 +254,7 @@ public:
 		return res;
 	}
 private:
-	T &m_t;
+	ebucket::bucket_processor &m_bp;
 };
 
 }}} // namespace ioremap::greylock::intersect

@@ -1,8 +1,8 @@
 #include <iostream>
 
-#include "greylock/bucket_processor.hpp"
 #include "greylock/intersection.hpp"
 
+#include <ebucket/bucket_processor.hpp>
 #include <boost/program_options.hpp>
 
 #include <ribosome/timer.hpp>
@@ -65,8 +65,8 @@ int main(int argc, char *argv[])
 		std::vector<elliptics::address> rem(remotes.begin(), remotes.end());
 		node->add_remote(rem);
 
-		greylock::bucket_processor bt(node);
-		if (!bt.init(elliptics::parse_groups(metagroups.c_str()), bnames)) {
+		ebucket::bucket_processor bp(node);
+		if (!bp.init(elliptics::parse_groups(metagroups.c_str()), bnames)) {
 			std::cerr << "Could not initialize bucket transport, exiting";
 			return -1;
 		}
@@ -75,7 +75,7 @@ int main(int argc, char *argv[])
 		start.key = iname;
 		start.bucket = bnames[0];
 
-		greylock::read_only_index<greylock::bucket_processor> idx(bt, start);
+		greylock::read_only_index idx(bp, start);
 		std::cout << idx.meta().str() << std::endl;
 	} catch (const std::exception &e) {
 		std::cerr << "Exception: " << e.what() << std::endl;

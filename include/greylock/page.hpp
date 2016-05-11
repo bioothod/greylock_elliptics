@@ -1,6 +1,7 @@
 #ifndef __INDEXES_PAGE_HPP
 #define __INDEXES_PAGE_HPP
 
+#include "greylock/io.hpp"
 #include "greylock/key.hpp"
 
 #include <iterator>
@@ -223,7 +224,6 @@ struct page {
 	}
 };
 
-template <typename T>
 class page_iterator {
 public:
 	typedef page_iterator self_type;
@@ -233,36 +233,17 @@ public:
 	typedef std::forward_iterator_tag iterator_category;
 	typedef std::ptrdiff_t difference_type;
 
-	page_iterator(T &t, const page &p) : m_t(t), m_page(p) {}
-	page_iterator(T &t, bool use_latest, const eurl &url) : m_t(t), m_url(url), m_use_latest(use_latest) {
-		elliptics::async_read_result async;
-
-		if (m_use_latest) {
-			async = m_t.read_latest(url);
-		} else {
-			async = m_t.read(url);
-		}
-		elliptics::read_result_entry e = async.get_one();
-
-		if (async.error() || e.error())
-			return;
-
-		auto file = e.file();
-		m_page.load(file.data(), file.size());
+	page_iterator(ebucket::bucket_processor &bp, const page &p) : m_bp(bp), m_page(p) {}
+	page_iterator(ebucket::bucket_processor &bp, bool use_latest, const eurl &url) : m_bp(bp), m_url(url), m_use_latest(use_latest) {
+		read_and_load();
 	}
-	page_iterator(const page_iterator &i) : m_t(i.m_t) {
+	page_iterator(const page_iterator &i) : m_bp(i.m_bp) {
 		m_page = i.m_page;
 		m_use_latest = i.m_use_latest;
 		m_page_index = i.m_page_index;
 	}
 
 	self_type operator++() {
-		try_loading_next_page();
-
-		return *this;
-	}
-
-	self_type operator++(int num) {
 		try_loading_next_page();
 
 		return *this;
@@ -287,11 +268,24 @@ public:
 	}
 
 private:
-	T &m_t;
+	ebucket::bucket_processor &m_bp;
 	page m_page;
 	size_t m_page_index = 0;
 	eurl m_url;
 	bool m_use_latest = false;
+
+	void read_and_load() {
+		auto async = io::read_data(m_bp, m_url, m_use_latest);
+		if (async.error())
+			return;
+
+		elliptics::read_result_entry e = async.get_one();
+		if (e.error())
+			return;
+
+		const auto &file = e.file();
+		m_page.load(file.data(), file.size());
+	}
 
 	void try_loading_next_page() {
 		++m_page_index;
@@ -303,25 +297,11 @@ private:
 			m_url = m_page.next;
 			m_page = page();
 
-			elliptics::async_read_result async;
-
-			if (m_use_latest) {
-				async = m_t.read_latest(m_url);
-			} else {
-				async = m_t.read(m_url);
-			}
-			elliptics::read_result_entry e = async.get_one();
-
-			if (async.error() || e.error())
-				return;
-
-			auto file = e.file();
-			m_page.load(file.data(), file.size());
+			read_and_load();
 		}
 	}
 };
 
-template <typename T>
 class iterator {
 public:
 	typedef iterator self_type;
@@ -331,8 +311,9 @@ public:
 	typedef std::forward_iterator_tag iterator_category;
 	typedef std::ptrdiff_t difference_type;
 
-	iterator(T &t, page &p, size_t internal_index) : m_t(t), m_page(p), m_page_internal_index(internal_index) {}
-	iterator(const iterator &i) : m_t(i.m_t) {
+	iterator(ebucket::bucket_processor &bp, page &p, size_t internal_index) :
+		m_bp(bp), m_page(p), m_page_internal_index(internal_index) {}
+	iterator(const iterator &i) : m_bp(i.m_bp) {
 		m_page = i.m_page;
 		m_page_internal_index = i.m_page_internal_index;
 		m_page_index = i.m_page_index;
@@ -362,18 +343,18 @@ public:
 	bool operator==(const self_type& rhs) {
 		bool equal = (m_page == rhs.m_page) && (m_page_internal_index == rhs.m_page_internal_index);
 
-		BH_LOG(m_t.logger(), INDEXES_LOG_NOTICE, "iterator: page operator==: %s vs %s, equal: %d",
+		BH_LOG(m_bp.logger(), INDEXES_LOG_NOTICE, "iterator: page operator==: %s vs %s, equal: %d",
 				m_page.str(), rhs.m_page.str(), equal);
 		return equal;
 	}
 	bool operator!=(const self_type& rhs) {
 		bool not_equal = (m_page != rhs.m_page) || (m_page_internal_index != rhs.m_page_internal_index);
-		BH_LOG(m_t.logger(), INDEXES_LOG_NOTICE, "iterator: page operator!=: %s vs %s, not-equal: %d",
+		BH_LOG(m_bp.logger(), INDEXES_LOG_NOTICE, "iterator: page operator!=: %s vs %s, not-equal: %d",
 				m_page.str(), rhs.m_page.str(), not_equal);
 		return not_equal;
 	}
 private:
-	T &m_t;
+	ebucket::bucket_processor &m_bp;
 	page m_page;
 	size_t m_page_index = 0;
 	size_t m_page_internal_index = 0;
@@ -383,21 +364,24 @@ private:
 			m_page_internal_index = 0;
 			++m_page_index;
 
-			BH_LOG(m_t.logger(), INDEXES_LOG_NOTICE, "iterator: loading next page: %s",
+			BH_LOG(m_bp.logger(), INDEXES_LOG_NOTICE, "iterator: loading next page: %s",
 					m_page.str());
 
 			if (m_page.next.empty()) {
 				m_page = page();
 			} else {
-				elliptics::async_read_result async = m_t.read(m_page.next);
-				elliptics::read_result_entry e = async.get_one();
+				auto url = m_page.next;
+				m_page = page();
 
-				if (async.error() || e.error()) {
-					m_page = page();
+				auto async = io::read_data(m_bp, url, false);
+				if (async.error())
 					return;
-				}
 
-				auto file = e.file();
+				elliptics::read_result_entry e = async.get_one();
+				if (e.error())
+					return;
+
+				const auto &file = e.file();
 				m_page.load(file.data(), file.size());
 			}
 		}
