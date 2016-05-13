@@ -40,6 +40,6 @@ target_link_libraries(greylock_server
 	${THEVOID_LIBRARIES}
 )
 
-install(TARGETS	greylock_server greylock_test greylock_page_info greylock_meta
+install(TARGETS	greylock_server greylock_page_info greylock_meta
 	RUNTIME DESTINATION bin COMPONENT runtime)
 
