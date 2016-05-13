@@ -1,6 +1,7 @@
 #pragma once
 
 #include "greylock/core.hpp"
+#include "greylock/key.hpp"
 
 #include <ebucket/bucket_processor.hpp>
 
