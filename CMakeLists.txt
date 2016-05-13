@@ -30,6 +30,9 @@ FILE(GLOB headers
 )
 install(FILES ${headers} DESTINATION include/greylock)
 
+configure_file(cmake/GreylockConfig.cmake.in "${PROJECT_BINARY_DIR}/cmake/GreylockConfig.cmake" @ONLY)
+install(FILES "${PROJECT_BINARY_DIR}/cmake/GreylockConfig.cmake" DESTINATION share/greylock/cmake)
+
 include_directories(${PROJECT_SOURCE_DIR}/include
 	${Boost_INCLUDE_DIRS}
 	${EBUCKET_INCLUDE_DIRS}
