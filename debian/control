@@ -28,3 +28,8 @@ Description: Greylock is a massively scalable searching/indexing engine
  It is built on top of Elliptics distributed storage and its buckets (http://doc.reverbrain.com/backrunner:backrunner#bucket).
  Greylock scales with elliptics storage (thousands of backends) and builds inverted indexes.
  Greylock is a low-level library, package contains HTTP server built using thevoid framework, which indexes requsted json files.
+
+Package: greylock-dev
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Development files for greylock search engine

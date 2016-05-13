@@ -57,14 +57,15 @@ rm -rf %{buildroot}
 %files
 %defattr(-,root,root,-)
 %{_bindir}/greylock_server
-%doc conf/*.json conf/consul.d/*.json
+%{_bindir}/greylock_meta
+%{_bindir}/greylock_page_info
+%doc conf/
 
 
 %files devel
 %defattr(-,root,root,-)
 %{_includedir}/*
-%{_bindir}/greylock_test
-#%{_datadir}/greylock/cmake/*
+%{_datadir}/greylock/cmake/*
 
 %changelog
 * Mon Aug 17 2015 Evgeniy Polyakov <zbr@ioremap.net> - 0.2.1
