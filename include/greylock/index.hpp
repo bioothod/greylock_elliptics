@@ -105,8 +105,9 @@ static inline const char *greylock_print_time(const struct dnet_time *t, char *d
 class index {
 public:
 	index(ebucket::bucket_processor &bp, const eurl &sk, bool read_only) :
-			m_bp(bp), m_log(bp.logger()), m_sk(sk), m_read_only(read_only) {
-		generate_meta_key();
+			m_bp(bp), m_log(bp.logger()), m_index_name(sk), m_read_only(read_only) {
+		m_start_key = generate_start_key(m_index_name);
+		m_meta_key = generate_meta_key(m_index_name);
 
 		if (!m_read_only) {
 			if (need_recovery()) {
@@ -118,15 +119,16 @@ public:
 
 		auto async = io::read_data(m_bp, meta_key(), false);
 		if (!async.is_valid()) {
-			elliptics::throw_error(-EINVAL, "invalid async read result for index %s", sk.str().c_str());
+			elliptics::throw_error(-EINVAL, "invalid async read result for index %s, meta_key: %s",
+					sk.str().c_str(), meta_key().str().c_str());
 		}
 
 		if (async.error()) {
 			if (async.error().code() == -ENOENT) {
 				if (m_read_only) {
-					elliptics::throw_error(-EROFS, "index: could not read index metadata from '%s' "
+					elliptics::throw_error(-EROFS, "index: could not read index metadata for index %s, meta_key: %s, "
 							"and not allowed to create new index",
-						sk.str().c_str());
+						sk.str().c_str(), meta_key().str().c_str());
 				}
 
 				start_page_init();
@@ -141,9 +143,10 @@ public:
 			// invalid entry means there are no positive results
 			if ((ent.error().code() == -ENOENT) || !ent.is_valid()) {
 				if (m_read_only) {
-					elliptics::throw_error(-EROFS, "index: could not read index metadata from '%s' "
+					elliptics::throw_error(-EROFS, "index: could not read index metadata for "
+							"index %s, meta_key: %s, is_valid: %d, error_code: %d"
 							"and not allowed to create new index",
-						sk.str().c_str());
+						sk.str().c_str(), meta_key().str().c_str(), ent.is_valid(), ent.error().code());
 				}
 
 				start_page_init();
@@ -160,10 +163,10 @@ public:
 			msgpack::unpack(&result, file.data<char>(), file.size());
 			result.get().convert(&m_meta);
 		} catch (const std::exception &e) {
-			BH_LOG(bp.logger(), INDEXES_LOG_ERROR, "failed to unpack start page: bucket: %s, key: %s, data size: %ld",
-					meta_key().bucket.c_str(), meta_key().key.c_str(), file.size());
-			elliptics::throw_error(-EINVAL, "failed to unpack start page: bucket: %s, key: %s, data size: %ld",
-					meta_key().bucket.c_str(), meta_key().key.c_str(), file.size());
+			BH_LOG(bp.logger(), INDEXES_LOG_ERROR, "failed to unpack start page: %s, data size: %ld",
+					meta_key().str().c_str(), file.size());
+			elliptics::throw_error(-EINVAL, "failed to unpack start page: %s, data size: %ld",
+					meta_key().str().c_str(), file.size());
 		}
 	}
 
@@ -178,12 +181,12 @@ public:
 		return m_meta;
 	}
 
-	const eurl &start() const {
-		return m_sk;
+	const eurl &start_key() const {
+		return m_start_key;
 	}
 
 	key search(const key &obj) const {
-		auto found = search(m_sk, obj);
+		auto found = search(start_key(), obj);
 		if (found.second < 0)
 			return key();
 
@@ -201,10 +204,10 @@ public:
 		m_modified = true;
 
 		recursion tmp;
-		BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: start: sk: %s, key: %s", m_sk.str().c_str(), obj.str().c_str());
-		elliptics::error_info err = insert(m_sk, obj, tmp);
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: start: sk: %s, key: %s", start_key().str().c_str(), obj.str().c_str());
+		elliptics::error_info err = insert(start_key(), obj, tmp);
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "insert: completed: sk: %s, key: %s, err: %s [%d]",
-				m_sk.str().c_str(), obj.str().c_str(), err.message(), err.code());
+				start_key().str().c_str(), obj.str().c_str(), err.message(), err.code());
 		if (err)
 			return err;
 
@@ -222,11 +225,11 @@ public:
 
 		m_modified = true;
 
-		BH_LOG(m_log, INDEXES_LOG_NOTICE, "remove: start: sk: %s, key: %s", m_sk.str().c_str(), obj.str().c_str());
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "remove: start: sk: %s, key: %s", start_key().str().c_str(), obj.str().c_str());
 		remove_recursion tmp;
-		elliptics::error_info err = remove(m_sk, obj, tmp);
+		elliptics::error_info err = remove(start_key(), obj, tmp);
 		BH_LOG(m_log, INDEXES_LOG_NOTICE, "remove: completed: sk: %s, key: %s, err: %s [%d]",
-				m_sk.str().c_str(), obj.str().c_str(), err.message(), err.code());
+				start_key().str().c_str(), obj.str().c_str(), err.message(), err.code());
 		if (err)
 			return err;
 
@@ -238,7 +241,7 @@ public:
 		key zero;
 		zero.id = k;
 
-		auto found = search(m_sk, zero);
+		auto found = search(start_key(), zero);
 		if (found.second < 0)
 			found.second = 0;
 
@@ -273,11 +276,11 @@ public:
 	}
 
 	page_iterator page_begin() const {
-		return page_iterator(m_bp, false, m_sk);
+		return page_iterator(m_bp, false, start_key());
 	}
 
 	page_iterator page_begin_latest() const {
-		return page_iterator(m_bp, true, m_sk);
+		return page_iterator(m_bp, true, start_key());
 	}
 
 	page_iterator page_end() const {
@@ -296,11 +299,24 @@ public:
 		return ss.str();
 	}
 
+	static greylock::eurl generate_start_key(const greylock::eurl &index_name) {
+		return generate_greylock_key(index_name.bucket, "i", index_name.key);
+	}
+
+	static greylock::eurl generate_meta_key(const greylock::eurl &index_name) {
+		return generate_greylock_key(index_name.bucket, "m", index_name.key);
+	}
+
+	static greylock::eurl generate_page_key(const std::string &bucket, const std::string &key) {
+		return generate_greylock_key(bucket, "p", key);
+	}
+
 private:
 	ebucket::bucket_processor &m_bp;
 	const logger &m_log;
-	eurl m_sk;
-	eurl m_meta_url;
+	eurl m_index_name;
+	eurl m_start_key;
+	eurl m_meta_key;
 
 	// when true, there was index modification, update its metadata
 	bool m_modified = false;
@@ -313,17 +329,39 @@ private:
 	index_meta m_meta;
 
 	const eurl &meta_key() const {
-		return m_meta_url;
+		return m_meta_key;
 	}
 
-	void generate_meta_key() {
-		m_meta_url.bucket = m_sk.bucket;
+	static greylock::eurl generate_greylock_key(const std::string &bucket, const std::string &prefix, const std::string &key) {
+		char tmp[prefix.size() + 1 + key.size() + 1];
+		int sz = snprintf(tmp, sizeof(tmp), "%s.%s", prefix.c_str(), key.c_str());
+		tmp[prefix.size()] = '\0';
 
-		const char *mns = "meta\0meta\0";
-		std::string ns(mns, 10);
+		greylock::eurl ret;
+		ret.bucket = bucket;
+		ret.key.assign(tmp, sz);
 
-		m_meta_url.key = io::generate(m_bp, ns, m_sk.key);
+		return ret;
 	}
+
+	elliptics::error_info generate_page_url(eurl &url) {
+		std::string bucket;
+		elliptics::error_info err = m_bp.get_bucket(default_reserve_size, bucket);
+		if (err) {
+			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: generate_page_url: could not get bucket, "
+				"generated page URL will not be valid: %s [%d]",
+					err.message(), err.code());
+			return err;
+		}
+
+		std::ostringstream ss;
+		ss << m_index_name.key << "." << m_meta.page_index.fetch_add(1);
+		url = generate_page_key(bucket, ss.str());
+
+		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key url: %s", url.str().c_str());
+		return elliptics::error_info();
+	}
+
 
 	void meta_write() {
 		std::stringstream ss;
@@ -339,7 +377,7 @@ private:
 	void start_page_init() {
 		page start_page;
 
-		io::write(m_bp, m_sk, start_page.save(), 0, true);
+		io::write(m_bp, start_key(), start_page.save(), 0, true);
 		m_meta.num_pages++;
 	}
 
@@ -377,12 +415,12 @@ private:
 	}
 
 	bool need_recovery() {
-		elliptics::async_lookup_result lookup = io::prepare_latest(m_bp, m_sk);
+		elliptics::async_lookup_result lookup = io::prepare_latest(m_bp, start_key());
 		lookup.wait();
 
 		if (lookup.error()) {
 			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: need_recovery: %s requires recovery, prepare_latest error: %s [%d]",
-					m_sk.str().c_str(), lookup.error().message().c_str(), lookup.error().code());
+					start_key().str().c_str(), lookup.error().message().c_str(), lookup.error().code());
 
 			// if there is no start key, there is nothing to recover
 			if (lookup.error().code() == -ENOENT)
@@ -411,7 +449,7 @@ private:
 
 			BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: need_recovery: %s: group: %d, mtime: %s (%ld.%ld), "
 					"first_time: %s (%ld.%ld), need_recovery: %d",
-					m_sk.str().c_str(), int(it->command()->id.group_id),
+					start_key().str().c_str(), int(it->command()->id.group_id),
 					greylock_print_time(&info->mtime, info_str, sizeof(info_str)), info->mtime.tsec, info->mtime.tnsec,
 					greylock_print_time(&first_time, first_str, sizeof(first_str)), first_time.tsec, first_time.tnsec,
 					need_recovery);
@@ -623,7 +661,7 @@ private:
 				m_meta.num_leaf_pages++;
 		}
 
-		if (!split.is_empty() && page_key == m_sk) {
+		if (!split.is_empty() && page_key == start_key()) {
 			// if we split root page, put old root data into new key
 			// root must always be accessible via start key
 			// generate new root, which will host data for 2 new pages:
@@ -649,7 +687,7 @@ private:
 
 			new_root.next = new_root.objects.front().url;
 
-			err = check(io::write(m_bp, m_sk, new_root.save(), default_reserve_size, true));
+			err = check(io::write(m_bp, start_key(), new_root.save(), default_reserve_size, true));
 			if (err)
 				return err;
 
@@ -777,20 +815,6 @@ private:
 				m_meta.num_leaf_pages--;
 		}
 
-		return elliptics::error_info();
-	}
-
-	elliptics::error_info generate_page_url(eurl &url) {
-		elliptics::error_info err = m_bp.get_bucket(default_reserve_size, url.bucket);
-		if (err) {
-			BH_LOG(m_log, INDEXES_LOG_ERROR, "index: generate_page_url: could not get bucket, "
-				"generated page URL will not be valid: %s [%d]",
-					err.message(), err.code());
-			return err;
-		}
-
-		url.key = m_meta_url.key + "." + std::to_string(m_meta.page_index.fetch_add(1));
-		BH_LOG(m_log, INDEXES_LOG_NOTICE, "index: generated key url: %s", url.str().c_str());
 		return elliptics::error_info();
 	}
 

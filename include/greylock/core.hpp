@@ -32,8 +32,18 @@ struct eurl {
 		return bucket.size() + key.size();
 	}
 
+	std::string to_print(const std::string &txt) const {
+		std::string res = txt;
+		for (size_t i = 0; i < res.size(); ++i) {
+			if (!isprint(res[i]))
+				res[i] = '.';
+		}
+
+		return res;
+	}
+
 	std::string str() const {
-		return bucket + "/" + key;
+		return to_print(bucket) + "/" + to_print(key);
 	}
 
 	bool operator!=(const eurl &other) const {

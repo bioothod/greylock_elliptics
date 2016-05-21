@@ -30,10 +30,10 @@ int main(int argc, char *argv[])
 		("metagroups", bpo::value<std::string>(&metagroups), "metadata groups where bucket info is stored: 1:2:3")
 		;
 
-	std::string key_name, key_file, bname;
+	std::string key_name, key_file, bucket_name;
 	bpo::options_description gr("Page options");
 	gr.add_options()
-		("bucket", bpo::value<std::string>(&bname), "bucket, where given page lives")
+		("bucket", bpo::value<std::string>(&bucket_name), "bucket, where given page lives")
 		("key", bpo::value<std::string>(&key_name), "page key string")
 		("full", "dump whole page, not only begin/end/meta info")
 		("key-file", bpo::value<std::string>(&key_file), "file where page data lives")
@@ -84,23 +84,21 @@ int main(int argc, char *argv[])
 			node->add_remote(rem);
 
 			ebucket::bucket_processor bp(node);
-			if (!bp.init(elliptics::parse_groups(metagroups.c_str()), std::vector<std::string>({bname}))) {
+			if (!bp.init(elliptics::parse_groups(metagroups.c_str()), std::vector<std::string>({bucket_name}))) {
 				std::cerr << "Could not initialize bucket transport, exiting";
 				return -1;
 			}
 
-			greylock::eurl url;
-			url.key = key_name;
-			url.bucket = bname;
+			greylock::eurl pkey = greylock::index::generate_page_key(bucket_name, key_name);
 
-			elliptics::async_read_result async = greylock::io::read_data(bp, url, false);
+			elliptics::async_read_result async = greylock::io::read_data(bp, pkey, false);
 			if (async.error()) {
-				std::cerr << "could not read page '" << url.str() << "': " << async.error().message() << std::endl;
+				std::cerr << "could not read page '" << pkey.str() << "': " << async.error().message() << std::endl;
 				return async.error().code();
 			}
 			elliptics::read_result_entry ent = async.get_one();
 			if (ent.error()) {
-				std::cerr << "could not read page (error entry) '" << url.str() <<
+				std::cerr << "could not read page (error entry) '" << pkey.str() <<
 					"': " << ent.error().message() << std::endl;
 				return ent.error().code();
 			}

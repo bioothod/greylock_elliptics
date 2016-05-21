@@ -182,8 +182,8 @@ public:
 				auto &min_it = idata[pos[0]].begin;
 
 				BH_LOG(m_bp.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s, it-index: %s, id: %s",
-						idata[pos[0]].idx.start().str(), min_it->str(),
-						idata_it->idx.start().str(), it->str());
+						idata[pos[0]].idx.start_key().str(), min_it->str(),
+						idata_it->idx.start_key().str(), it->str());
 
 				if (*it == *min_it) {
 					pos.push_back(current);
@@ -215,7 +215,7 @@ public:
 						min_str = min_it->str();
 
 					BH_LOG(m_bp.logger(), INDEXES_LOG_INFO, "intersection: min-index: %s, id: %s increasing to %s",
-							idata[*it].idx.start().str(), prev_str, min_str);
+							idata[*it].idx.start_key().str(), prev_str, min_str);
 				}
 
 				continue;
