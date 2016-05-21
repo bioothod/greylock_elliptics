@@ -92,7 +92,7 @@ struct io {
 		BH_LOG(bp.logger(), DNET_LOG_NOTICE,
 				"%s: bucket write: bucket: %s, key: %s, data-size: %d, reserve-size: %d, cache: %d, ts: %s (%ld.%ld)\n",
 				dnet_dump_id(&ctl.id),
-				b->meta().name.c_str(), url.key.c_str(), data.size(), reserve_size, cache,
+				b->meta().name.c_str(), url.str().c_str(), data.size(), reserve_size, cache,
 				dnet_print_time(&ctl.io.timestamp), (long)ctl.io.timestamp.tsec, (long)ctl.io.timestamp.tnsec);
 
 		return s.write_data(ctl);
