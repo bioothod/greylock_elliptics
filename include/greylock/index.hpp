@@ -376,7 +376,9 @@ private:
 
 	void start_page_init() {
 		page start_page;
+		m_modified = true;
 
+		BH_LOG(m_log, INDEXES_LOG_INFO, "index: writing start page: %s", start_key().str());
 		io::write(m_bp, start_key(), start_page.save(), 0, true);
 		m_meta.num_pages++;
 	}
