@@ -1,6 +1,6 @@
 Summary:	Greylock is a massively scalable full-text searching/indexing engine
 Name:		greylock
-Version:	0.2.1
+Version:	0.3.0
 Release:	1%{?dist}.1
 
 License:	GPLv2+
@@ -68,6 +68,27 @@ rm -rf %{buildroot}
 %{_datadir}/greylock/cmake/*
 
 %changelog
+* Sat May 21 2016 Evgeniy Polyakov <zbr@ioremap.net> - 0.3.0
+- index: switched to new page/key generation scheme, which includes null-byte in the names of internal objects stored in elliptics
+- cmake: added greylock config cmake file
+- Switched to ebucket project instead of internal bucket implementation. Fixed bug in remove() method (id/url update)
+- page: added iterator constructor which allows to use read_latest() instead of read()
+- index: added read-only index, moved index recovery into own function
+- index_directory: aded search query
+- server: use ribosome::vector_lock
+- Major refactoring. Switched to elliptics API instead of additional abstraction level for proper error handling and performance.
+- Added tool to index directory of go/cpp/hpp/c/h files or list of files. Tool performs 'dnet_usage main' search after each document has been indexed, this is needed to test monotonically increasing (or constant) number of returned search result.
+- Added tool to read and unpack page content
+- index: when updating page id, it should also update timestamp, so copy the whole key and change url if needed
+- spec: depend on ribosome-devel
+- spec: added elliptics-client-devel package
+- index: switched to new index format (with positions support) and new request/reply format
+- search: removed search client, use client.py instead
+- Switched to new indexing/searching HTTP API described in src/{index,search}.json files. It naturally supports attributes. So far only tex
+- t attributes are supported.
+- Added sec.nsec timestamps into indexes. We put it into string index, but there should also be numerical indexes. That's yet a to-be-imple
+- mented feature.
+
 * Mon Aug 17 2015 Evgeniy Polyakov <zbr@ioremap.net> - 0.2.1
 - http: reworked vector_lock, now its based on a tree of condition variables
 - perf: added several indexes and seed command line arguments
