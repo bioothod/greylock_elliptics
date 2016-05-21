@@ -144,7 +144,7 @@ public:
 			if ((ent.error().code() == -ENOENT) || !ent.is_valid()) {
 				if (m_read_only) {
 					elliptics::throw_error(-EROFS, "index: could not read index metadata for "
-							"index %s, meta_key: %s, is_valid: %d, error_code: %d"
+							"index %s, meta_key: %s, is_valid: %d, error_code: %d, "
 							"and not allowed to create new index",
 						sk.str().c_str(), meta_key().str().c_str(), ent.is_valid(), ent.error().code());
 				}
