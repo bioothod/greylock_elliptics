@@ -1,6 +1,6 @@
 Summary:	Greylock is a massively scalable full-text searching/indexing engine
 Name:		greylock
-Version:	0.3.0
+Version:	0.3.1
 Release:	1%{?dist}.1
 
 License:	GPLv2+
@@ -68,6 +68,11 @@ rm -rf %{buildroot}
 %{_datadir}/greylock/cmake/*
 
 %changelog
+* Sun May 22 2016 Evgeniy Polyakov <zbr@ioremap.net> - 0.3.1
+- io: when printing bucket write debug info, use correct url.str()
+- index: set 'modified' to given index when creating its start page
+- index: fixed spelling
+
 * Sat May 21 2016 Evgeniy Polyakov <zbr@ioremap.net> - 0.3.0
 - index: switched to new page/key generation scheme, which includes null-byte in the names of internal objects stored in elliptics
 - cmake: added greylock config cmake file
