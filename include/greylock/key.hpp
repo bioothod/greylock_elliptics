@@ -21,9 +21,9 @@ struct key {
 		timestamp |= nsec & ((1<<30) - 1);
 	}
 
-	void get_timestamp(long &tsec, long &nsec) const {
-		tsec = timestamp >> 30;
-		nsec = timestamp & ((1<<30) - 1);
+	void get_timestamp(long *tsec, long *nsec) const {
+		*tsec = timestamp >> 30;
+		*nsec = timestamp & ((1<<30) - 1);
 	}
 
 	size_t size() const {
@@ -60,7 +60,7 @@ struct key {
 
 	std::string str() const {
 		long tsec, tnsec;
-		get_timestamp(tsec, tnsec);
+		get_timestamp(&tsec, &tnsec);
 		return id + ":" + url.str() + ":" + std::to_string(tsec) + "." + std::to_string(tnsec);
 	}
 };
