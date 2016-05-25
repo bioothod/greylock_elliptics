@@ -3,6 +3,7 @@ Section: net
 Priority: optional
 Maintainer: Evgeniy Polyakov <zbr@ioremap.net>
 Build-Depends:
+ cdbs,
  cmake (>= 2.6),
  debhelper (>= 7.0.50~),
  ribosome-dev,

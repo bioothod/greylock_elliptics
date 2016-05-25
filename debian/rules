@@ -1,26 +1,9 @@
 #!/usr/bin/make -f
 
-%:
-	dh $@ --buildsystem=cmake
+include /usr/share/cdbs/1/rules/debhelper.mk
+include /usr/share/cdbs/1/class/cmake.mk
 
-override_dh_auto_configure:
-	DESTDIR="$(CURDIR)/debian/greylock" dh_auto_configure \
-		--buildsystem=cmake -- \
-		-DCMAKE_INSTALL_PREFIX="/usr" \
-		-DCMAKE_BUILD_TYPE=RelWithDebInfo
+DEB_CMAKE_EXTRA_FLAGS=
 
-override_dh_auto_install:
-	dh_auto_install \
-		--destdir="$(CURDIR)/debian/greylock"
-		--buildsystem=cmake
-
-override_dh_clean:
-	rm -rf $(CURDIR)/bindings/python/python/build
-	dh_clean
-
-override_dh_makeshlibs:
-	dh_makeshlibs -V "greylock (>= $(shell dpkg-parsechangelog | sed -n -r -e 's/^Version: ([^.]+\.[^.]+).*/\1/p'))"
-
-override_dh_strip:
-	#dh_strip --dbg-package=greylock-dbg
+install/greylock-dev::
 
