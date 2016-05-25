@@ -159,12 +159,12 @@ struct page {
 		replaced = false;
 
 		for (auto it = objects.begin(), end = objects.end(); it != end; ++it) {
-			if (obj <= *it) {
+			if ((obj.id == it->id) || (obj.timestamp <= it->timestamp)) {
 				copy.push_back(obj);
 				total_size += obj.size();
 				copied = true;
 
-				if (obj == *it) {
+				if (obj.id == it->id) {
 					replaced = true;
 					total_size -= it->size();
 					++it;
