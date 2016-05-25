@@ -37,6 +37,7 @@ int main(int argc, char *argv[])
 	gr.add_options()
 		("index", bpo::value<std::string>(&iname)->required(), "index name")
 		("bucket", bpo::value<std::vector<std::string>>(&bnames)->composing()->required(), "index start page lives in this bucket")
+		("dump", "dump index keys to stdout")
 		;
 
 	bpo::options_description cmdline_options;
@@ -77,6 +78,18 @@ int main(int argc, char *argv[])
 
 		greylock::read_only_index idx(bp, start);
 		std::cout << idx.meta().str() << std::endl;
+
+		if (vm.count("dump")) {
+			for (auto it = idx.begin(), end = idx.end(); it != end; ++it) {
+				dnet_time dt;
+				it->get_timestamp((long *)&dt.tsec, (long *)&dt.tnsec);
+
+				std::cout << "url: " << it->url.str() <<
+					", id: " << it->id <<
+					", timestamp: " << dnet_print_time(&dt) <<
+					std::endl;
+			}
+		}
 	} catch (const std::exception &e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	}
