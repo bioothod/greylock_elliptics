@@ -46,5 +46,4 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
  liblz4-dev,
  libswarm3-dev,
  libthevoid3-dev
-
 Description: Development files for greylock search engine
