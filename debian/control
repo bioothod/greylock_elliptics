@@ -6,7 +6,7 @@ Build-Depends:
  cdbs,
  cmake (>= 2.6),
  debhelper (>= 7.0.50~),
- ribosome-dev,
+ ribosome-dev (>= 0.2.8),
  libboost-dev,
  libboost-system-dev,
  libboost-program-options-dev,
@@ -33,5 +33,18 @@ Description: Greylock is a massively scalable searching/indexing engine
 
 Package: greylock-dev
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends},
+ ribosome-dev (>= 0.2.8),
+ libboost-dev,
+ libboost-system-dev,
+ libboost-program-options-dev,
+ libboost-filesystem-dev,
+ ebucket-dev,
+ elliptics-dev,
+ elliptics-client,
+ libmsgpack-dev,
+ liblz4-dev,
+ libswarm3-dev,
+ libthevoid3-dev
+
 Description: Development files for greylock search engine
