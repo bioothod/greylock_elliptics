@@ -1,6 +1,6 @@
 Summary:	Greylock is a massively scalable full-text searching/indexing engine
 Name:		greylock
-Version:	0.3.1
+Version:	0.3.2
 Release:	1%{?dist}.1
 
 License:	GPLv2+
@@ -68,6 +68,16 @@ rm -rf %{buildroot}
 %{_datadir}/greylock/cmake/*
 
 %changelog
+* Mon May 30 2016 Evgeniy Polyakov <zbr@ioremap.net> - 0.3.2
+- index: use 'greylock.' prefix for its metadata keys, this will allow together living with other projects
+- debian: added build dependencies as dependencies, for development package, which is header-only
+- package: depend on ebucket
+- debian: use cdbs to build package
+- meta: added option to dump all keys in given index page
+- key: changed get_timestamp() signature to pointers to highlight that data will be modified
+- 	also this will not allow cryptic rvalue-lvalue errors if you provide not 'long &' but 'unsigned long'
+- page: insert key into the page based on its id, but sort keys based on timestamp
+
 * Sun May 22 2016 Evgeniy Polyakov <zbr@ioremap.net> - 0.3.1
 - io: when printing bucket write debug info, use correct url.str()
 - index: set 'modified' to given index when creating its start page

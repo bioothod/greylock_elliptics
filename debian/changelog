@@ -1,3 +1,16 @@
+greylock (0.3.2) unstable; urgency=low
+
+  * index: use 'greylock.' prefix for its metadata keys, this will allow together living with other projects
+  * debian: added build dependencies as dependencies, for development package, which is header-only
+  * package: depend on ebucket
+  * debian: use cdbs to build package
+  * meta: added option to dump all keys in given index page
+  * key: changed get_timestamp() signature to pointers to highlight that data will be modified
+  * 	also this will not allow cryptic rvalue-lvalue errors if you provide not 'long &' but 'unsigned long'
+  * page: insert key into the page based on its id, but sort keys based on timestamp
+
+ -- Evgeniy Polyakov <zbr@ioremap.net>  Mon, 30 May 2016 21:27:24 +0400
+
 greylock (0.3.1) unstable; urgency=low
 
   * io: when printing bucket write debug info, use correct url.str()
