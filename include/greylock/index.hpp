@@ -300,15 +300,15 @@ public:
 	}
 
 	static greylock::eurl generate_start_key(const greylock::eurl &index_name) {
-		return generate_greylock_key(index_name.bucket, "i", index_name.key);
+		return generate_greylock_key(index_name.bucket, "greylock.i", index_name.key);
 	}
 
 	static greylock::eurl generate_meta_key(const greylock::eurl &index_name) {
-		return generate_greylock_key(index_name.bucket, "m", index_name.key);
+		return generate_greylock_key(index_name.bucket, "greylock.m", index_name.key);
 	}
 
 	static greylock::eurl generate_page_key(const std::string &bucket, const std::string &key) {
-		return generate_greylock_key(bucket, "p", key);
+		return generate_greylock_key(bucket, "greylock.p", key);
 	}
 
 private:
