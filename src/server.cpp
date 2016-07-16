@@ -531,13 +531,6 @@ public:
 
 			auto ireq = server()->get_indexes(mbox, idxs);
 
-			if (ireq.indexes.size() == 0) {
-				return elliptics::create_error(-EINVAL,
-						"process_one_document: url: %s, mailbox: %s, doc: %s: no valid indexes",
-						req.url().to_human_readable().c_str(), mbox.c_str(),
-						doc.str().c_str());
-			}
-
 			for (size_t i = 0; i < ireq.indexes.size(); ++i) {
 				greylock::eurl &iname = ireq.indexes[i];
 				std::vector<size_t> &positions = ireq.positions[i];
