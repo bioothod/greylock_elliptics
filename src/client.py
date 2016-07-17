@@ -220,7 +220,8 @@ class search_machine():
             spl = a.split(':', 1)
             if len(spl) >= 2:
                 idx[spl[0]] = spl[1]
-        idx["text"] = text
+        if len(text) != 0:
+            idx["text"] = text
 
         return idx
 
@@ -266,7 +267,6 @@ class search_machine():
 
         s = {}
         s["paging"] = p
-        s["text"] = text
         s["mailbox"] = self.mailbox
         s["query"] = self.text_attrs_to_dict(text, attrs)
 
